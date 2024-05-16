@@ -193,10 +193,10 @@ class Solver:
                     fn_id, tyvars=tyvars, unification=u
                 )
                 tyargs = set(fn_tyargs(unified_fn_tmp))
-                if ty_to in tyargs:  # prune infinite recursion
-                    continue
                 if len(tyargs) == 1:
                     tyarg = tyargs.pop()
+                    if tyarg == ty_to:  # prune infinite recursion
+                        continue
                     subgoal_id = self.add_goal(
                         goal=("reachable-from", ty_from, tyarg),
                         parent_id=goal_id,
@@ -208,6 +208,8 @@ class Solver:
                         ty_head, ty_tail = tyargs[head_idx], [
                             tyarg for i, tyarg in enumerate(tyargs) if i != head_idx
                         ]
+                        if ty_head == ty_to:  # prune infinite recursion
+                            continue
                         subgoal_id = self.add_goal(
                             goal=("multiarg-reachable-from", ty_from, ty_head, ty_tail),
                             parent_id=goal_id,
