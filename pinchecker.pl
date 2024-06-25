@@ -3,7 +3,7 @@
 % File: pinchecker.pl
 % Description: Generate Rust code that violates the Pin contract
 %
-% Version: 0.2.0
+% Version: 0.2.1
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(lists)).
@@ -13,12 +13,13 @@ fn_typing(move_F, [T], T) .
 fn_typing(borrow_F, [T], ref_T(T)).
 fn_typing(borrow_mut_F, [T], mutref_T(T)).
 fn_typing(option_some_F, [T], option_T(T)).
-fn_typing(option_none_F, [], option_T(arbitrary_type)).
+fn_typing(option_none_F, [], option_T(_)).
 fn_typing(pin_macro_F, [T], pin_T(mutref_T(T))).
 fn_typing(unmovable_new_F_testonly, [], unmovable_T_testonly).
 fn_typing(borrow_option_p1_F_testonly, [option_T(T)], ref_T(T)).
 fn_typing(non_copy_storage_F_testonly, [T], ncs_T_testonly(T)).
 fn_typing(pin_new_unchecked_F_testonly, [mutref_T(T)], pin_T(mutref_T(T))).
+fn_typing(kill_two_F_testonly, [_, _], unit_T).
 
 fn_rpil(move_F,
         [rpil_kill(op(1))
@@ -58,6 +59,10 @@ fn_rpil(pin_new_unchecked_F_testonly,
         [rpil_bind(op(0), op(1))
         ,rpil_pin(deref(op(1)))
         ]).
+fn_rpil(kill_two_F_testonly,
+        [rpil_kill(op(2))
+        ,rpil_kill(op(1))
+        ]).
 
 impl_trait(ref_T(_), copy_Tr).
 impl_trait(option_T(T), copy_Tr) :- impl_trait(T, copy_Tr).
@@ -87,9 +92,14 @@ rpil_term_reduction(Ops, deref(Term), deref(TermReduced)) :-
         rpil_term_reduction(Ops, Term, TermReduced), !.
 
 ctx_typing(Stmts, Var, Type) :-
+        ground(Stmts), ground(Var), ctx_typing_nondet(Stmts, Var, Type), !.
+ctx_typing(Stmts, Var, Type) :-
+        !, ctx_typing_nondet(Stmts, Var, Type).
+
+ctx_typing_nondet(Stmts, Var, Type) :-
         length(Stmts, L), Stmts = [Stmt|StmtsR],
         Stmt = funcall(L, Func, Args),
-        (   Var = L ->
+        (   Var = L,
             fn_typing(Func, ArgTypes, Type),
             maplist(alive_var_type(StmtsR), Args, ArgTypes)
         ;   ctx_typing(StmtsR, Var, Type)
@@ -100,19 +110,34 @@ alive_var_type(Stmts, Var, Type) :-
     ctx_typing(Stmts, Var, Type).
 
 ctx_liveness(Stmts, Var, Liveness) :-
+        ground(Stmts), ground(Var), ctx_liveness_nondet(Stmts, Var, Liveness), !.
+ctx_liveness(Stmts, Var, Liveness) :-
+        !, ctx_liveness_nondet(Stmts, Var, Liveness).
+
+ctx_liveness_nondet(Stmts, Var, Liveness) :-
         length(Stmts, L), Stmts = [Stmt|StmtsR],
         Stmt = funcall(L, Func, Args),
+        fn_rpil_reduced(Func, [L|Args], RpilInsts),
         ctx_typing(Stmts, L, _),
-        (   Var = L ->
+        (   Var = L,
             Liveness = alive
-        ;   fn_rpil_reduced(Func, [L|Args], Rpil),
-            memberchk(rpil_kill(Var), Rpil) ->
-            if((ctx_typing(StmtsR, Var, Type),
-                lives_even_after_killing(Type))
-            ,   Liveness = alive
-            ,   Liveness = dead
+        ;   ctx_liveness_partial(StmtsR, RpilInsts, Var, Liveness)
+        ).
+
+ctx_liveness_partial(Stmts, [], Var, Liveness) :-
+         !, ctx_liveness(Stmts, Var, Liveness).
+ctx_liveness_partial(Stmts, Insts, Var, Liveness) :-
+        Insts = [Inst|InstsR],
+        ctx_liveness_partial(Stmts, InstsR, Var, LivenessR),
+        (   LivenessR = dead ->
+            Liveness = dead
+        ;   Inst = rpil_kill(Var) ->
+            (   ctx_typing(Stmts, Var, Type),
+                lives_even_after_killing(Type) ->
+                Liveness = alive
+            ;   Liveness = dead
             )
-        ;   ctx_liveness(StmtsR, Var, Liveness)
+        ;   Liveness = alive
         ).
 
 ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
@@ -173,16 +198,6 @@ replace_origin(place(X0, P), X, Y, place(Y0, P)) :-
 replace_origin(deref(X0), X, Y, deref(Y0)) :-
         replace_origin(X0, X, Y, Y0).
 
-well_typed_program(Stmts, Length) :-
-        length(Stmts, Length),
-        check_all_lines(Stmts, Length).
-
-check_all_lines(_, 0).
-check_all_lines(Stmts, L) :-
-        ctx_typing(Stmts, L, _),
-        LR is L - 1,
-        check_all_lines(Stmts, LR).
-
 % =============================================================================
 
 :- begin_tests(rpil).
@@ -211,11 +226,18 @@ test(fn_rpil_reduced_2) :-
 :- begin_tests(ctx_typing_liveness).
 
 test(ctx_typing_1) :-
-        ctx_typing([funcall(2,unmovable_new_F_testonly,[]),_], 2, unmovable_T_testonly).
+        ctx_typing([funcall(1,unmovable_new_F_testonly,[])], 1, unmovable_T_testonly).
 
 test(ctx_typing_2) :-
         ctx_typing(Stmts, 2, unmovable_T_testonly), !,
         Stmts = [funcall(2,move_F,[1]),funcall(1,unmovable_new_F_testonly,[])].
+
+test(ctx_typing_3) :-
+        Stmts = [funcall(3,move_F,[2])
+                ,funcall(2,unmovable_new_F_testonly,[])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall(Var, ctx_typing(Stmts, Var, unmovable_T_testonly), [3,2,1]).
 
 test(lives_even_after_killing_1) :-
         lives_even_after_killing(mutref_T(_)).
@@ -231,6 +253,11 @@ test(ctx_liveness_1) :-
                      ,funcall(1,unmovable_new_F_testonly,[])
                      ], 1, dead).
 
+test(ctx_liveness_1_neg, [fail]) :-
+        ctx_liveness([funcall(2,move_F,[1])
+                     ,funcall(1,unmovable_new_F_testonly,[])
+                     ], 1, alive).
+
 test(ctx_liveness_2, [fail]) :-
         ctx_liveness([funcall(1,borrow_F,[1])
                      ], 1, _).
@@ -244,13 +271,27 @@ test(ctx_liveness_4) :-
         ctx_liveness([funcall(3,move_F,[2])
                      ,funcall(2,borrow_mut_F,[1])
                      ,funcall(1,unmovable_new_F_testonly,[])
-                     ], 2, Liveness), !,
-        Liveness = alive.
+                     ], 2, alive).
+
+test(ctx_liveness_4_neg, [fail]) :-
+        ctx_liveness([funcall(3,move_F,[2])
+                     ,funcall(2,borrow_mut_F,[1])
+                     ,funcall(1,unmovable_new_F_testonly,[])
+                     ], 2, dead).
+
+test(ctx_liveness_5) :-
+        Stmts = [funcall(4,kill_two_F_testonly,[2,3])
+                ,funcall(3,borrow_mut_F,[1])
+                ,funcall(2,borrow_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall(Var, ctx_liveness(Stmts, Var, alive), [4,3,2,1]).
 
 test(ctx_typing_liveness_1) :-
+        length(Stmts, 2),
         ctx_typing(Stmts, 2, unmovable_T_testonly),
         ctx_liveness(Stmts, 1, dead),
-        well_typed_program(Stmts, 2), !,
+        ctx_typing(Stmts, 1, _), !,
         Stmts = [funcall(2,move_F,[1])
                 ,funcall(1,unmovable_new_F_testonly,[])
                 ].
@@ -288,8 +329,11 @@ test(ctx_borrowing_4) :-
                       ], place(3,1), 1, shared).
 
 test(ctx_borrowing_5) :-
+        length(Stmts, 3),
         ctx_borrowing(Stmts, place(3,1), 1, shared),
-        well_typed_program(Stmts, 3), !,
+        ctx_typing(Stmts, 3, _),
+        ctx_typing(Stmts, 2, _),
+        ctx_typing(Stmts, 1, _), !,
         Stmts = [funcall(3,option_some_F,[2])
                 ,funcall(2,borrow_F,[1])
                 ,funcall(1,option_none_F,[])
@@ -371,8 +415,11 @@ test(ctx_pinning_2) :-
                     ], 1, moved).
 
 test(ctx_pinning_3) :-
-        well_typed_program(Stmts, 3),
-        ctx_pinning(Stmts, 1, pinned), !,
+        length(Stmts, 3),
+        ctx_pinning(Stmts, 1, pinned),
+        ctx_typing(Stmts, 3, _),
+        ctx_typing(Stmts, 2, _),
+        ctx_typing(Stmts, 1, _), !,
         Stmts = [funcall(3,pin_new_unchecked_F_testonly,[2])
                 ,funcall(2,borrow_mut_F,[1])
                 ,funcall(1,option_none_F,[])
