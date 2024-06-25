@@ -3,7 +3,7 @@
 % File: pinchecker.pl
 % Description: Generate Rust code that violates the Pin contract
 %
-% Version: 0.2.1
+% Version: 0.2.2
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(lists)).
@@ -17,6 +17,7 @@ fn_typing(option_none_F, [], option_T(_)).
 fn_typing(pin_macro_F, [T], pin_T(mutref_T(T))).
 fn_typing(unmovable_new_F_testonly, [], unmovable_T_testonly).
 fn_typing(borrow_option_p1_F_testonly, [option_T(T)], ref_T(T)).
+fn_typing(borrow_mut_option_p1_F_testonly, [option_T(T)], mutref_T(T)).
 fn_typing(non_copy_storage_F_testonly, [T], ncs_T_testonly(T)).
 fn_typing(pin_new_unchecked_F_testonly, [mutref_T(T)], pin_T(mutref_T(T))).
 fn_typing(kill_two_F_testonly, [_, _], unit_T).
@@ -49,6 +50,9 @@ fn_rpil(unmovable_new_F_testonly,
         []).
 fn_rpil(borrow_option_p1_F_testonly,
         [rpil_borrow(op(0), place(op(1),1))
+        ]).
+fn_rpil(borrow_mut_option_p1_F_testonly,
+        [rpil_borrow_mut(op(0), place(op(1),1))
         ]).
 fn_rpil(non_copy_storage_F_testonly,
         [rpil_kill(op(1))
@@ -92,7 +96,8 @@ rpil_term_reduction(Ops, deref(Term), deref(TermReduced)) :-
         rpil_term_reduction(Ops, Term, TermReduced), !.
 
 ctx_typing(Stmts, Var, Type) :-
-        ground(Stmts), ground(Var), ctx_typing_nondet(Stmts, Var, Type), !.
+        ground(Stmts), ground(Var), ground(Type),
+        ctx_typing_nondet(Stmts, Var, Type), !.
 ctx_typing(Stmts, Var, Type) :-
         !, ctx_typing_nondet(Stmts, Var, Type).
 
@@ -110,7 +115,8 @@ alive_var_type(Stmts, Var, Type) :-
     ctx_typing(Stmts, Var, Type).
 
 ctx_liveness(Stmts, Var, Liveness) :-
-        ground(Stmts), ground(Var), ctx_liveness_nondet(Stmts, Var, Liveness), !.
+        ground(Stmts), ground(Var), ground(Liveness),
+        ctx_liveness_nondet(Stmts, Var, Liveness), !.
 ctx_liveness(Stmts, Var, Liveness) :-
         !, ctx_liveness_nondet(Stmts, Var, Liveness).
 
@@ -141,12 +147,18 @@ ctx_liveness_partial(Stmts, Insts, Var, Liveness) :-
         ).
 
 ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
+        ground(Stmts), ground(Lhs), ground(Rhs), ground(Kind),
+        ctx_borrowing_nondet(Stmts, Lhs, Rhs, Kind), !.
+ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
+        !, ctx_borrowing_nondet(Stmts, Lhs, Rhs, Kind).
+
+ctx_borrowing_nondet(Stmts, Lhs, Rhs, Kind) :-
         length(Stmts, L), Stmts = [Stmt|StmtsR],
         Stmt = funcall(L, Func, Args),
         fn_rpil_reduced(Func, [L|Args], RpilInsts),
+        ctx_borrowing_partial(StmtsR, RpilInsts, Lhs, Rhs, Kind),
         (origin(Lhs, VarL) -> ctx_liveness(Stmts, VarL, alive)),
-        (origin(Rhs, VarR) -> ctx_liveness(Stmts, VarR, alive)),
-        ctx_borrowing_partial(StmtsR, RpilInsts, Lhs, Rhs, Kind).
+        (origin(Rhs, VarR) -> ctx_liveness(Stmts, VarR, alive)).
 
 ctx_borrowing_partial(Stmts, [], Lhs, Rhs, Kind) :-
          !, ctx_borrowing(Stmts, Lhs, Rhs, Kind).
@@ -157,8 +169,9 @@ ctx_borrowing_partial(Stmts, Insts, Lhs, Rhs, Kind) :-
         ;   Inst = rpil_borrow_mut(Lhs, Rhs) ->
             Kind = mutable
         ;   Inst = rpil_bind(PL, PR),
-            replace_origin(Lhs, PL, PR, Prev) ->
-            ctx_borrowing_partial(Stmts, InstsR, Prev, Rhs, Kind)
+            (   replace_origin(Lhs, PL, PR, Prev) ->
+                ctx_borrowing(Stmts, Prev, Rhs, Kind)
+            )
         ;   ctx_borrowing_partial(Stmts, InstsR, Lhs, Rhs, Kind)
         ).
 
@@ -340,11 +353,20 @@ test(ctx_borrowing_5) :-
                 ].
 
 test(ctx_borrowing_6) :-
-        ctx_borrowing([funcall(4,move_F,[3])
-                      ,funcall(3,option_some_F,[2])
-                      ,funcall(2,borrow_F,[1])
-                      ,funcall(1,unmovable_new_F_testonly,[])
-                      ], place(4,1), 1, shared).
+        Stmts = [funcall(4,move_F,[3])
+                ,funcall(3,option_some_F,[2])
+                ,funcall(2,borrow_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        ctx_borrowing(Stmts, place(4,1), 1, shared).
+
+test(ctx_borrowing_6_rev) :-
+        Stmts = [funcall(4,move_F,[3])
+                ,funcall(3,option_some_F,[2])
+                ,funcall(2,borrow_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall(Place, ctx_borrowing(Stmts, Place, 1, shared), [place(4,1), place(3,1), 2]).
 
 test(ctx_borrowing_7) :-
         ctx_borrowing([funcall(4,option_some_F,[3])
@@ -365,6 +387,13 @@ test(ctx_borrowing_9) :-
         ctx_borrowing([funcall(2,pin_macro_F,[1])
                       ,funcall(1,unmovable_new_F_testonly,[])
                       ], 2, deref(2), mutable).
+
+test(ctx_borrowing_10) :-
+        Stmts = [funcall(3,borrow_mut_option_p1_F_testonly,[2])
+                ,funcall(2,option_some_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall(Place, ctx_borrowing(Stmts, 3, Place, mutable), [place(2,1)]).
 
 :- end_tests(ctx_borrowing).
 
