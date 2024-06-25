@@ -3,7 +3,7 @@
 % File: pinchecker.pl
 % Description: Generate Rust code that violates the Pin contract
 %
-% Version: 0.2.2
+% Version: 0.2.3
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(lists)).
@@ -169,9 +169,8 @@ ctx_borrowing_partial(Stmts, Insts, Lhs, Rhs, Kind) :-
         ;   Inst = rpil_borrow_mut(Lhs, Rhs) ->
             Kind = mutable
         ;   Inst = rpil_bind(PL, PR),
-            (   replace_origin(Lhs, PL, PR, Prev) ->
-                ctx_borrowing(Stmts, Prev, Rhs, Kind)
-            )
+            ctx_borrowing_partial(Stmts, InstsR, Prev, Rhs, Kind),
+            replace_origin(Lhs, PL, PR, Prev)
         ;   ctx_borrowing_partial(Stmts, InstsR, Lhs, Rhs, Kind)
         ).
 
