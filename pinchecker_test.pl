@@ -3,7 +3,7 @@
 % File: pinchecker_test.pl
 % Description: Test cases for module(pinchecker)
 %
-% Version: 0.3.4
+% Version: 0.3.5
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(plunit)).
@@ -339,6 +339,38 @@ test(ctx_borrowing_12_enum) :-
         findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
         Results = [[5,place(1,3),mutable],[4,3,mutable],[place(3,2),1,mutable],[2,1,mutable]].
 
+test(ctx_borrowing_generate_1) :-
+        Stmts = [S5
+                ,S4
+                ,S3
+                ,funcall(2,borrow_mut_F,[1])
+                ,funcall(1,enum_with_3_places_new_F_testonly,[])
+                ],
+        ctx_borrowing(Stmts, 5, place(1,3), mutable),
+        ctx_typing(Stmts, 5, _),
+        ctx_typing(Stmts, 4, _),
+        ctx_typing(Stmts, 3, _), !,
+        S5 = funcall(5,extract_mutref_to_ew3p_p3_F_testonly,[4]),
+        S4 = funcall(4,borrow_mut_F,[3]),
+        S3 = funcall(3,struct_with_mutref_ew3p_at_p2_new_F_testonly,[2]).
+
+%test(ctx_borrowing_generate_1_full) :-
+%        Stmts = [S5
+%                ,S4
+%                ,S3
+%                ,S2
+%                ,S1
+%                ],
+%        ctx_borrowing(Stmts, 5, place(1,3), mutable),
+%        ctx_typing(Stmts, 5, _),
+%        ctx_typing(Stmts, 4, _),
+%        ctx_typing(Stmts, 3, _), !,
+%        S5 = funcall(5,extract_mutref_to_ew3p_p3_F_testonly,[4]),
+%        S4 = funcall(4,borrow_mut_F,[3]),
+%        S3 = funcall(3,struct_with_mutref_ew3p_at_p2_new_F_testonly,[2]),
+%        S2 = funcall(2,borrow_mut_F,[1]),
+%        S1 = funcall(1,enum_with_3_places_new_F_testonly,[]).
+
 :- end_tests(ctx_borrowing).
 
 
@@ -503,6 +535,18 @@ test(ctx_pinning_7) :-
         findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
         Results = [[place(1,3),pinned],[3,unpinned],[1,unpinned]].
 
+test(ctx_pinning_8) :-
+        Stmts = [funcall(7,move_F,[1])
+                ,funcall(6,pin_new_unchecked_F_testonly,[5])
+                ,funcall(5,extract_mutref_to_ew3p_p3_F_testonly,[4])
+                ,funcall(4,borrow_mut_F,[3])
+                ,funcall(3,struct_with_mutref_ew3p_at_p2_new_F_testonly,[2])
+                ,funcall(2,borrow_mut_F,[1])
+                ,funcall(1,enum_with_3_places_new_F_testonly,[])
+                ],
+        findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
+        Results = [[place(1,3),moved],[3,unpinned],[1,unpinned]].
+
 test(ctx_pinning_generate_1) :-
         length(Stmts, 2),
         ctx_pinning(Stmts, 1, pinned),
@@ -518,5 +562,45 @@ test(ctx_pinning_generate_2) :-
         ctx_typing(Stmts, 1, _), !,
         Stmts = [funcall(2,borrow_mut_and_pin_and_move_F_testonly,[1])
                 ,funcall(1,option_none_F,[])].
+
+test(ctx_pinning_generate_3) :-
+        Stmts = [S7
+                ,S6
+                ,funcall(5,extract_mutref_to_ew3p_p3_F_testonly,[4])
+                ,funcall(4,borrow_mut_F,[3])
+                ,funcall(3,struct_with_mutref_ew3p_at_p2_new_F_testonly,[2])
+                ,funcall(2,borrow_mut_F,[1])
+                ,funcall(1,enum_with_3_places_new_F_testonly,[])
+                ],
+        ctx_pinning(Stmts, place(1,3), moved),
+        ctx_typing(Stmts, 7, _),
+        ctx_typing(Stmts, 6, _), !,
+        S7 = funcall(7,move_F,[1]),
+        S6 = funcall(6,pin_new_unchecked_F_testonly,[5]).
+
+%test(ctx_pinning_generate_3_full) :-
+%        Stmts = [S7
+%                ,S6
+%                ,S5
+%                ,S4
+%                ,S3
+%                ,S2
+%                ,S1
+%                ],
+%        ctx_pinning(Stmts, place(1,3), moved),
+%        ctx_typing(Stmts, 7, _),
+%        ctx_typing(Stmts, 6, _),
+%        ctx_typing(Stmts, 5, _),
+%        ctx_typing(Stmts, 4, _),
+%        ctx_typing(Stmts, 3, _),
+%        ctx_typing(Stmts, 2, _),
+%        ctx_typing(Stmts, 1, _), !,
+%        S7 = funcall(7,move_F,[1]),
+%        S6 = funcall(6,pin_new_unchecked_F_testonly,[5]),
+%        S5 = funcall(5,extract_mutref_to_ew3p_p3_F_testonly,[4]),
+%        S4 = funcall(4,borrow_mut_F,[3]),
+%        S3 = funcall(3,struct_with_mutref_ew3p_at_p2_new_F_testonly,[2]),
+%        S2 = funcall(2,borrow_mut_F,[1]),
+%        S1 = funcall(1,enum_with_3_places_new_F_testonly,[]).
 
 :- end_tests(ctx_pinning).

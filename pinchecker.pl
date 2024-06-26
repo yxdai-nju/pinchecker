@@ -3,7 +3,7 @@
 % File: pinchecker.pl
 % Description: Generate Rust code that violates the Pin contract
 %
-% Version: 0.3.4
+% Version: 0.3.5
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- module(pinchecker, [
@@ -274,10 +274,10 @@ ctx_pinning_partial(Stmts, Insts, Place, Status) :-
             ;   StatusR = pinned ->
                 (   Inst = rpil_deref_move(BrwConPlace),
                     ctx_borrowing_partial(Stmts, InstsR, BrwConPlace, ConPlace, _),
-                    contagious_origin(ConPlace, Place) ->
+                    contagious_origin(Place, ConPlace) ->
                     Status = moved
                 ;   Inst = rpil_move(ConPlace),
-                    contagious_origin(ConPlace, Place) ->
+                    contagious_origin(Place, ConPlace) ->
                     Status = moved
                 ;   Status = pinned
                 )
@@ -297,7 +297,7 @@ origin(X, X).
 contagious_origin(place(X0, _), X) :-
         nonvar(X0), contagious_origin(X0, X), !.
 contagious_origin(deref(_), _) :-
-        fail.
+        !, fail.
 contagious_origin(X, X).
 
 
