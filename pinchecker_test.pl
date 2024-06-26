@@ -3,7 +3,7 @@
 % File: pinchecker_test.pl
 % Description: Test cases for module(pinchecker)
 %
-% Version: 0.3.2
+% Version: 0.3.3
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(plunit)).
