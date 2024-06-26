@@ -3,7 +3,7 @@
 % File: pinchecker.pl
 % Description: Generate Rust code that violates the Pin contract
 %
-% Version: 0.3.3
+% Version: 0.3.4
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- module(pinchecker, [
@@ -188,6 +188,7 @@ ctx_borrowing_nondet(Stmts, Lhs, Rhs, Kind) :-
         length(Stmts, L), Stmts = [Stmt|StmtsR],
         Stmt = funcall(L, Func, Args),
         fn_rpil_reduced(Func, [L|Args], RpilInsts),
+        ctx_typing(Stmts, L, _),
         ctx_borrowing_partial(StmtsR, RpilInsts, Lhs, Rhs, Kind),
         origin(Lhs, VarL), ctx_liveness(Stmts, VarL, alive),
         origin(Rhs, VarR), ctx_liveness(Stmts, VarR, alive).
@@ -198,13 +199,15 @@ ctx_borrowing_partial(Stmts, [], Lhs, Rhs, Kind) :-
 ctx_borrowing_partial(Stmts, Insts, Lhs, Rhs, Kind) :-
         Insts = [Inst|InstsR],
         (   Inst = rpil_borrow(PL, PR),
-            follow_deref(Stmts, Insts, PL, Lhs),
-            follow_deref(Stmts, Insts, PR, Rhs),
-            Kind = shared
+            (   follow_deref(Stmts, Insts, PL, Lhs) ->
+                follow_deref(Stmts, Insts, PR, Rhs) ->
+                Kind = shared
+            )
         ;   Inst = rpil_borrow_mut(PL, PR),
-            follow_deref(Stmts, Insts, PL, Lhs),
-            follow_deref(Stmts, Insts, PR, Rhs),
-            Kind = mutable
+            (   follow_deref(Stmts, Insts, PL, Lhs) ->
+                follow_deref(Stmts, Insts, PR, Rhs) ->
+                Kind = mutable
+            )
         ;   Inst = rpil_bind(PL, PR), % TODO: Also apply follow_deref on PL and PR
             ctx_borrowing_partial(Stmts, InstsR, Prev, Rhs, Kind),
             replace_origin(Lhs, PL, PR, Prev)
@@ -212,21 +215,22 @@ ctx_borrowing_partial(Stmts, Insts, Lhs, Rhs, Kind) :-
         ).
 
 
-%% follow_deref(?Stmts, ?Insts, +Place0, -Place) is det
+%% follow_deref(?Stmts, ?Insts, ?Place0, ?Place) is nondet
 %
 %  Follows dereference chains to find the ultimate referenced place
 %
 %  @param Stmts         List of statements
 %  @param Insts         List of RPIL instructions
 %  @param Place0        The initial place to follow
-%  @param Place         The resulting place without deref(_)'s
+%  @param Place         The place without deref(_)'s
 %
+follow_deref(_, _, X, X) :- var(X).
 follow_deref(Stmts, Insts, place(X0, P), place(X, P)) :-
-        nonvar(X0), follow_deref(Stmts, Insts, X0, X), !.
+        follow_deref(Stmts, Insts, X0, X).
 follow_deref(Stmts, Insts, deref(X0), X) :-
-        nonvar(X0), follow_deref(Stmts, Insts, X0, X1), !,
+        follow_deref(Stmts, Insts, X0, X1),
         ctx_borrowing_partial(Stmts, Insts, X1, X, _).
-follow_deref(_, _, X, X).
+follow_deref(_, _, X, X) :- nonvar(X).
 
 
 %% ctx_pinning(+Stmts, +Place, -Status) is det
@@ -249,6 +253,7 @@ ctx_pinning_nondet(Stmts, Place, Status) :-
         length(Stmts, L), Stmts = [Stmt|StmtsR],
         Stmt = funcall(L, Func, Args),
         fn_rpil_reduced(Func, [L|Args], RpilInsts),
+        ctx_typing(Stmts, L, _),
         ctx_pinning_partial(StmtsR, RpilInsts, Place, Status).
 
 

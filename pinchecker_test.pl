@@ -3,7 +3,7 @@
 % File: pinchecker_test.pl
 % Description: Test cases for module(pinchecker)
 %
-% Version: 0.3.3
+% Version: 0.3.4
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(plunit)).
@@ -344,7 +344,12 @@ test(ctx_borrowing_12_enum) :-
 
 :- begin_tests(follow_deref).
 
-% TODO: This test case currently fails and needs to be fixed
+test(ctx_borrowing_follow_deref_1, [fail]) :-
+        ctx_borrowing([funcall(1,borrow_F,[_])], _, 1, shared).
+
+test(ctx_pinning_follow_deref_1, [fail]) :-
+        ctx_pinning([funcall(1,borrow_F,[_])], 1, _).
+
 test(follow_deref_1) :-
         Stmts = [funcall(4,borrow_mut_F,[3])
                 ,funcall(3,struct_with_mutref_ew3p_at_p2_new_F_testonly,[2])
