@@ -3,7 +3,7 @@
 % File: pinchecker.pl
 % Description: Generate Rust code that violates the Pin contract
 %
-% Version: 0.2.3
+% Version: 0.2.4
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(lists)).
@@ -143,7 +143,8 @@ ctx_liveness_partial(Stmts, Insts, Var, Liveness) :-
                 Liveness = alive
             ;   Liveness = dead
             )
-        ;   Liveness = alive
+        ;   LivenessR = alive ->
+            Liveness = alive
         ).
 
 ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
@@ -164,9 +165,9 @@ ctx_borrowing_partial(Stmts, [], Lhs, Rhs, Kind) :-
          !, ctx_borrowing(Stmts, Lhs, Rhs, Kind).
 ctx_borrowing_partial(Stmts, Insts, Lhs, Rhs, Kind) :-
         Insts = [Inst|InstsR],
-        (   Inst = rpil_borrow(Lhs, Rhs) ->
+        (   Inst = rpil_borrow(Lhs, Rhs),
             Kind = shared
-        ;   Inst = rpil_borrow_mut(Lhs, Rhs) ->
+        ;   Inst = rpil_borrow_mut(Lhs, Rhs),
             Kind = mutable
         ;   Inst = rpil_bind(PL, PR),
             ctx_borrowing_partial(Stmts, InstsR, Prev, Rhs, Kind),
@@ -175,23 +176,40 @@ ctx_borrowing_partial(Stmts, Insts, Lhs, Rhs, Kind) :-
         ).
 
 ctx_pinning(Stmts, Place, Status) :-
+        ground(Stmts), ground(Place),
+        ctx_pinning_nondet(Stmts, Place, Status), !.
+ctx_pinning(Stmts, Place, Status) :-
+        !, ctx_pinning_nondet(Stmts, Place, Status).
+
+ctx_pinning_nondet(Stmts, Place, Status) :-
         length(Stmts, L), Stmts = [Stmt|StmtsR],
         Stmt = funcall(L, Func, Args),
         fn_rpil_reduced(Func, [L|Args], RpilInsts),
-        ctx_pinning_partial(StmtsR, RpilInsts, Place, Status).
+        (   Place = L,
+            Status = unpinned
+        ;   ctx_pinning_partial(StmtsR, RpilInsts, Place, Status)
+        ).
 
 ctx_pinning_partial(Stmts, [], Place, Status) :-
         !, ctx_pinning(Stmts, Place, Status).
 ctx_pinning_partial(Stmts, Insts, Place, Status) :-
         Insts = [Inst|InstsR],
-        (   Inst = rpil_pin(deref(Borrower)) ->
-            ctx_borrowing(Stmts, Borrower, Place, _),
-            Status = pinned
-        ;   Inst = rpil_move(ContainingPlace) ->
-            ctx_pinning(Stmts, Place, _),
-            contagious_origin(ContainingPlace, Place),
+        ctx_pinning_partial(Stmts, InstsR, Place, StatusR),
+        (   StatusR = moved ->
             Status = moved
-        ;   ctx_pinning_partial(Stmts, InstsR, Place, Status)
+        ;   StatusR = pinned ->
+            (   Inst = rpil_move(ContainingPlace),
+                ctx_pinning(Stmts, Place, _),
+                contagious_origin(ContainingPlace, Place) ->
+                Status = moved
+            ;   Status = pinned
+            )
+        ;   StatusR = unpinned ->
+            (   Inst = rpil_pin(deref(Borrower)),
+                ctx_borrowing(Stmts, Borrower, Place, _) ->
+                Status = pinned
+            ;   Status = unpinned
+            )
         ).
 
 origin(place(X0, _), X) :-
@@ -312,14 +330,6 @@ test(ctx_typing_liveness_1) :-
 
 :- begin_tests(ctx_borrowing).
 
-test(ctx_borrowing_partial_1) :-
-        ctx_borrowing_partial([], [rpil_borrow(2,1)], 2, 1, shared).
-
-test(ctx_borrowing_partial_2) :-
-        ctx_borrowing_partial([funcall(2,borrow_F,[1])
-                              ,funcall(1,unmovable_new_F_testonly,[])
-                              ], [], 2, 1, shared).
-
 text(ctx_borrowing_1) :-
         ctx_borrowing([funcall(1,borrow_F,[1])], 1, 1, shared).
 
@@ -394,6 +404,16 @@ test(ctx_borrowing_10) :-
                 ],
         findall(Place, ctx_borrowing(Stmts, 3, Place, mutable), [place(2,1)]).
 
+test(ctx_borrowing_11) :-
+        Stmts = [funcall(5,borrow_mut_option_p1_F_testonly,[3])
+                ,funcall(4,borrow_F,[1])
+                ,funcall(3,option_some_F,[2])
+                ,funcall(2,unmovable_new_F_testonly,[])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
+        Results = [[5,place(3,1),mutable],[4,1,shared]].
+
 :- end_tests(ctx_borrowing).
 
 :- begin_tests(ctx_borrowing_liveness).
@@ -436,11 +456,20 @@ test(ctx_pinning_1) :-
                     ], 1, pinned).
 
 test(ctx_pinning_2) :-
-        ctx_pinning([funcall(4,move_F,[1])
-                    ,funcall(3,pin_new_unchecked_F_testonly,[2])
-                    ,funcall(2,borrow_mut_F,[1])
-                    ,funcall(1,unmovable_new_F_testonly,[])
-                    ], 1, moved).
+        Stmts = [funcall(4,move_F,[1])
+                ,funcall(3,pin_new_unchecked_F_testonly,[2])
+                ,funcall(2,borrow_mut_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        ctx_pinning(Stmts, 1, moved).
+
+test(ctx_pinning_2_variant) :-
+        Stmts = [funcall(4,move_F,[1])
+                ,funcall(3,pin_new_unchecked_F_testonly,[2])
+                ,funcall(2,borrow_mut_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall(Place, ctx_pinning(Stmts, Place, unpinned), [4,3,2]).
 
 test(ctx_pinning_3) :-
         length(Stmts, 3),
