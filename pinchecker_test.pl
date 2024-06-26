@@ -1,9 +1,9 @@
 % -*- coding: iso_8859_1 -*-
-% 
+%
 % File: pinchecker_test.pl
 % Description: Test cases for module(pinchecker)
 %
-% Version: 0.3.0
+% Version: 0.3.1
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(plunit)).
@@ -27,6 +27,9 @@ pinchecker:fn_typing(non_copy_storage_F_testonly, [T], ncs_T_testonly(T)).
 pinchecker:fn_typing(pin_new_unchecked_F_testonly, [mutref_T(T)], pin_T(mutref_T(T))).
 pinchecker:fn_typing(kill_two_F_testonly, [_, _], unit_T).
 pinchecker:fn_typing(move_two_F_testonly, [_, _], unit_T).
+pinchecker:fn_typing(borrow_mut_and_pin_F_testonly, [_], unit_T).
+pinchecker:fn_typing(pin_and_move_F_testonly, [_], unit_T).
+pinchecker:fn_typing(borrow_mut_and_pin_and_move_F_testonly, [_], unit_T).
 
 
 pinchecker:fn_rpil(move_F,
@@ -49,7 +52,7 @@ pinchecker:fn_rpil(option_none_F,
         []).
 pinchecker:fn_rpil(pin_macro_F,
         [rpil_kill(op(1))
-        ,rpil_pin(deref(op(0)))
+        ,rpil_deref_pin(op(0))
         ,rpil_borrow_mut(op(0), deref(op(0)))
         ,rpil_move(op(1))
         ]).
@@ -68,7 +71,7 @@ pinchecker:fn_rpil(non_copy_storage_F_testonly,
         ]).
 pinchecker:fn_rpil(pin_new_unchecked_F_testonly,
         [rpil_bind(op(0), op(1))
-        ,rpil_pin(deref(op(1)))
+        ,rpil_deref_pin(op(1))
         ]).
 pinchecker:fn_rpil(kill_two_F_testonly,
         [rpil_kill(op(2))
@@ -78,7 +81,19 @@ pinchecker:fn_rpil(move_two_F_testonly,
         [rpil_move(op(2))
         ,rpil_move(op(1))
         ]).
-
+pinchecker:fn_rpil(borrow_mut_and_pin_F_testonly,
+        [rpil_deref_pin(op(0))
+        ,rpil_borrow_mut(op(0), op(1))
+        ]).
+pinchecker:fn_rpil(pin_and_move_F_testonly,
+        [rpil_deref_move(op(1))
+        ,rpil_deref_pin(op(1))
+        ]).
+pinchecker:fn_rpil(borrow_mut_and_pin_and_move_F_testonly,
+        [rpil_deref_move(op(0))
+        ,rpil_deref_pin(op(0))
+        ,rpil_borrow_mut(op(0), op(1))
+        ]).
 
 pinchecker:impl_trait(ref_T(_), copy_Tr).
 pinchecker:impl_trait(option_T(T), copy_Tr) :- pinchecker:impl_trait(T, copy_Tr).
@@ -171,7 +186,16 @@ test(ctx_liveness_5) :-
                 ,funcall(2,borrow_F,[1])
                 ,funcall(1,unmovable_new_F_testonly,[])
                 ],
-        findall(Var, ctx_liveness(Stmts, Var, alive), [4,3,2,1]).
+        findall(Var, ctx_liveness(Stmts, Var, alive), [4,3,2,1]),
+        findall(Var, ctx_liveness(Stmts, Var, dead), []).
+
+test(ctx_liveness_6) :-
+        Stmts = [funcall(3,kill_two_F_testonly,[1,2])
+                ,funcall(2,borrow_mut_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall(Var, ctx_liveness(Stmts, Var, alive), [3,2]),
+        findall(Var, ctx_liveness(Stmts, Var, dead), [1]).
 
 test(ctx_typing_liveness_1) :-
         length(Stmts, 2),
@@ -226,13 +250,14 @@ test(ctx_borrowing_6) :-
                 ],
         ctx_borrowing(Stmts, place(4,1), 1, shared).
 
-test(ctx_borrowing_6_rev) :-
+test(ctx_borrowing_6_enum) :-
         Stmts = [funcall(4,move_F,[3])
                 ,funcall(3,option_some_F,[2])
                 ,funcall(2,borrow_F,[1])
                 ,funcall(1,unmovable_new_F_testonly,[])
                 ],
-        findall(Place, ctx_borrowing(Stmts, Place, 1, shared), [place(4,1), place(3,1), 2]).
+        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
+        Results = [[place(4,1),1,shared],[place(3,1),1,shared],[2,1,shared]].
 
 test(ctx_borrowing_7) :-
         ctx_borrowing([funcall(4,option_some_F,[3])
@@ -242,17 +267,25 @@ test(ctx_borrowing_7) :-
                       ], place(place(4,1),1), 1, shared).
 
 test(ctx_borrowing_8) :-
-        ctx_borrowing([funcall(5,move_F,[4])
-                      ,funcall(4,option_some_F,[3])
-                      ,funcall(3,option_some_F,[2])
-                      ,funcall(2,borrow_F,[1])
-                      ,funcall(1,unmovable_new_F_testonly,[])
-                      ], place(place(5,1),1), 1, shared).
+        Stmts = [funcall(5,move_F,[4])
+                ,funcall(4,option_some_F,[3])
+                ,funcall(3,option_some_F,[2])
+                ,funcall(2,borrow_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
+        Results = [[place(place(5,1),1),1,shared]
+                  ,[place(place(4,1),1),1,shared]
+                  ,[place(3,1),1,shared]
+                  ,[2,1,shared]
+                  ].
 
 test(ctx_borrowing_9) :-
-        ctx_borrowing([funcall(2,pin_macro_F,[1])
-                      ,funcall(1,unmovable_new_F_testonly,[])
-                      ], 2, deref(2), mutable).
+        Stmts = [funcall(2,pin_macro_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
+        Results = [[2,deref(2),mutable]].
 
 test(ctx_borrowing_10) :-
         Stmts = [funcall(3,borrow_mut_option_p1_F_testonly,[2])
@@ -283,36 +316,67 @@ test(ctx_borrowing_liveness_1, [fail]) :-
                       ], 2, 1, shared).
 
 test(ctx_borrowing_liveness_2) :-
-        ctx_borrowing([funcall(3,borrow_option_p1_F_testonly,[2])
-                      ,funcall(2,option_some_F,[1])
-                      ,funcall(1,unmovable_new_F_testonly,[])
-                      ], 3, place(2,1), shared).
+        Stmts = [funcall(3,borrow_option_p1_F_testonly,[2])
+                ,funcall(2,option_some_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
+        Results = [[3,place(2,1),shared]].
 
 test(ctx_borrowing_liveness_3) :-
-        ctx_borrowing([funcall(4,non_copy_storage_F_testonly,[3])
-                      ,funcall(3,borrow_option_p1_F_testonly,[2])
-                      ,funcall(2,option_some_F,[1])
-                      ,funcall(1,unmovable_new_F_testonly,[])
-                      ], place(4,1), place(2,1), shared).
+        Stmts = [funcall(4,non_copy_storage_F_testonly,[3])
+                ,funcall(3,borrow_option_p1_F_testonly,[2])
+                ,funcall(2,option_some_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
+        Results = [[place(4,1),place(2,1),shared],[3,place(2,1),shared]].
 
-test(ctx_borrowing_liveness_4, [fail]) :-
-        ctx_borrowing([funcall(5,move_F,[4])
-                      ,funcall(4,non_copy_storage_F_testonly,[3])
-                      ,funcall(3,borrow_option_p1_F_testonly,[2])
-                      ,funcall(2,option_some_F,[1])
-                      ,funcall(1,unmovable_new_F_testonly,[])
-                      ], place(4,1), place(2,1), shared).
+test(ctx_borrowing_liveness_4) :-
+        Stmts = [funcall(5,move_F,[4])
+                ,funcall(4,non_copy_storage_F_testonly,[3])
+                ,funcall(3,borrow_option_p1_F_testonly,[2])
+                ,funcall(2,option_some_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
+        Results = [[place(5,1),place(2,1),shared],[3,place(2,1),shared]].
+
+test(ctx_borrowing_liveness_4_neg, [fail]) :-
+        Stmts = [funcall(5,move_F,[4])
+                ,funcall(4,non_copy_storage_F_testonly,[3])
+                ,funcall(3,borrow_option_p1_F_testonly,[2])
+                ,funcall(2,option_some_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        ctx_borrowing(Stmts, place(4,1), place(2,1), _).
 
 :- end_tests(ctx_borrowing_liveness).
 
 
 :- begin_tests(ctx_pinning).
 
+test(ctx_pinning_unpinned_1) :-
+        Stmts = [funcall(2,borrow_mut_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        ctx_pinning(Stmts, 1, unpinned), !, Stmts = [_|StmtsR],
+        \+ ctx_pinning(StmtsR, _, _).
+
 test(ctx_pinning_1) :-
-        ctx_pinning([funcall(3,pin_new_unchecked_F_testonly,[2])
-                    ,funcall(2,borrow_mut_F,[1])
-                    ,funcall(1,unmovable_new_F_testonly,[])
-                    ], 1, pinned).
+        Stmts = [funcall(3,pin_new_unchecked_F_testonly,[2])
+                ,funcall(2,borrow_mut_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        ctx_pinning(Stmts, 1, pinned).
+
+test(ctx_pinning_1_enum) :-
+        Stmts = [funcall(3,pin_new_unchecked_F_testonly,[2])
+                ,funcall(2,borrow_mut_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
+        Results = [[1,pinned]].
 
 test(ctx_pinning_2) :-
         Stmts = [funcall(4,move_F,[1])
@@ -322,36 +386,63 @@ test(ctx_pinning_2) :-
                 ],
         ctx_pinning(Stmts, 1, moved).
 
-test(ctx_pinning_2_variant) :-
+test(ctx_pinning_2_enum) :-
         Stmts = [funcall(4,move_F,[1])
                 ,funcall(3,pin_new_unchecked_F_testonly,[2])
                 ,funcall(2,borrow_mut_F,[1])
                 ,funcall(1,unmovable_new_F_testonly,[])
                 ],
-        findall(Place, ctx_pinning(Stmts, Place, unpinned), [4,3,2]).
+        findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
+        Results = [[1,moved]].
 
 test(ctx_pinning_3) :-
-        length(Stmts, 3),
-        ctx_pinning(Stmts, 1, pinned),
-        ctx_typing(Stmts, 3, _),
-        ctx_typing(Stmts, 2, _),
-        ctx_typing(Stmts, 1, _), !,
-        Stmts = [funcall(3,pin_new_unchecked_F_testonly,[2])
-                ,funcall(2,borrow_mut_F,[1])
-                ,funcall(1,option_none_F,[])
-                ].
+        Stmts = [funcall(6,pin_new_unchecked_F_testonly,[4])
+                ,funcall(5,borrow_mut_option_p1_F_testonly,[3])
+                ,funcall(4,borrow_mut_F,[1])
+                ,funcall(3,option_some_F,[2])
+                ,funcall(2,unmovable_new_F_testonly,[])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
+        Results = [[place(3,1),unpinned],[1,pinned]].
 
 test(ctx_pinning_4) :-
-        length(Stmts, 4),
-        ctx_pinning(Stmts, 1, moved),
-        ctx_typing(Stmts, 4, _),
-        ctx_typing(Stmts, 3, _),
+        Stmts = [funcall(7,pin_new_unchecked_F_testonly,[5])
+                ,funcall(6,pin_new_unchecked_F_testonly,[4])
+                ,funcall(5,borrow_mut_option_p1_F_testonly,[3])
+                ,funcall(4,borrow_mut_F,[1])
+                ,funcall(3,option_some_F,[2])
+                ,funcall(2,unmovable_new_F_testonly,[])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
+        Results = [[place(3,1),pinned],[1,pinned]].
+
+test(ctx_pinning_5) :-
+        Stmts = [funcall(6,pin_and_move_F_testonly,[5])
+                ,funcall(5,borrow_mut_option_p1_F_testonly,[3])
+                ,funcall(4,borrow_mut_F,[1])
+                ,funcall(3,option_some_F,[2])
+                ,funcall(2,unmovable_new_F_testonly,[])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
+        Results = [[place(3,1),moved],[1,unpinned]].
+
+test(ctx_pinning_generate_1) :-
+        length(Stmts, 2),
+        ctx_pinning(Stmts, 1, pinned),
         ctx_typing(Stmts, 2, _),
         ctx_typing(Stmts, 1, _), !,
-        Stmts = [funcall(4,move_F,[1])
-                ,funcall(3,pin_new_unchecked_F_testonly,[2])
-                ,funcall(2,borrow_mut_F,[1])
-                ,funcall(1,option_none_F,[])
-                ].
+        Stmts = [funcall(2,borrow_mut_and_pin_F_testonly,[1])
+                ,funcall(1,option_none_F,[])].
+
+test(ctx_pinning_generate_2) :-
+        length(Stmts, 2),
+        ctx_pinning(Stmts, 1, moved),
+        ctx_typing(Stmts, 2, _),
+        ctx_typing(Stmts, 1, _), !,
+        Stmts = [funcall(2,borrow_mut_and_pin_and_move_F_testonly,[1])
+                ,funcall(1,option_none_F,[])].
 
 :- end_tests(ctx_pinning).
