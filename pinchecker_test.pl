@@ -3,7 +3,7 @@
 % File: pinchecker_test.pl
 % Description: Test cases for module(pinchecker)
 %
-% Version: 0.3.1
+% Version: 0.3.2
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(plunit)).
@@ -30,6 +30,10 @@ pinchecker:fn_typing(move_two_F_testonly, [_, _], unit_T).
 pinchecker:fn_typing(borrow_mut_and_pin_F_testonly, [_], unit_T).
 pinchecker:fn_typing(pin_and_move_F_testonly, [_], unit_T).
 pinchecker:fn_typing(borrow_mut_and_pin_and_move_F_testonly, [_], unit_T).
+pinchecker:fn_typing(move_pin_inner_F_testonly, [_], unit_T).
+pinchecker:fn_typing(enum_with_3_places_new_F_testonly, [], ew3p_T_testonly).
+pinchecker:fn_typing(struct_with_mutref_ew3p_at_p2_new_F_testonly, [mutref_T(ew3p_T_testonly)], smrew3pp2_T_testonly).
+pinchecker:fn_typing(extract_mutref_to_ew3p_p3_F_testonly, [mutref_T(smrew3pp2_T_testonly)], mutref_T(ew3p_p3_T)).
 
 
 pinchecker:fn_rpil(move_F,
@@ -53,7 +57,7 @@ pinchecker:fn_rpil(option_none_F,
 pinchecker:fn_rpil(pin_macro_F,
         [rpil_kill(op(1))
         ,rpil_deref_pin(op(0))
-        ,rpil_borrow_mut(op(0), deref(op(0)))
+        ,rpil_borrow_mut(op(0), place(op(0),0))
         ,rpil_move(op(1))
         ]).
 pinchecker:fn_rpil(unmovable_new_F_testonly,
@@ -94,6 +98,18 @@ pinchecker:fn_rpil(borrow_mut_and_pin_and_move_F_testonly,
         ,rpil_deref_pin(op(0))
         ,rpil_borrow_mut(op(0), op(1))
         ]).
+pinchecker:fn_rpil(move_pin_inner_F_testonly,
+        [rpil_deref_move(op(1))
+        ]).
+pinchecker:fn_rpil(enum_with_3_places_new_F_testonly,
+        []).
+pinchecker:fn_rpil(struct_with_mutref_ew3p_at_p2_new_F_testonly,
+        [rpil_bind(place(op(0),2), op(1))
+        ]).
+pinchecker:fn_rpil(extract_mutref_to_ew3p_p3_F_testonly,
+        [rpil_borrow_mut(op(0), place(deref(place(deref(op(1)),2)),3))
+        ]).
+
 
 pinchecker:impl_trait(ref_T(_), copy_Tr).
 pinchecker:impl_trait(option_T(T), copy_Tr) :- pinchecker:impl_trait(T, copy_Tr).
@@ -285,7 +301,7 @@ test(ctx_borrowing_9) :-
                 ,funcall(1,unmovable_new_F_testonly,[])
                 ],
         findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
-        Results = [[2,deref(2),mutable]].
+        Results = [[2,place(2,0),mutable]].
 
 test(ctx_borrowing_10) :-
         Stmts = [funcall(3,borrow_mut_option_p1_F_testonly,[2])
@@ -304,7 +320,41 @@ test(ctx_borrowing_11) :-
         findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
         Results = [[5,place(3,1),mutable],[4,1,shared]].
 
+test(ctx_borrowing_12) :-
+        Stmts = [funcall(5,extract_mutref_to_ew3p_p3_F_testonly,[4])
+                ,funcall(4,borrow_mut_F,[3])
+                ,funcall(3,struct_with_mutref_ew3p_at_p2_new_F_testonly,[2])
+                ,funcall(2,borrow_mut_F,[1])
+                ,funcall(1,enum_with_3_places_new_F_testonly,[])
+                ],
+        ctx_borrowing(Stmts, 5, place(1,3), mutable).
+
+test(ctx_borrowing_12_enum) :-
+        Stmts = [funcall(5,extract_mutref_to_ew3p_p3_F_testonly,[4])
+                ,funcall(4,borrow_mut_F,[3])
+                ,funcall(3,struct_with_mutref_ew3p_at_p2_new_F_testonly,[2])
+                ,funcall(2,borrow_mut_F,[1])
+                ,funcall(1,enum_with_3_places_new_F_testonly,[])
+                ],
+        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
+        Results = [[5,place(1,3),mutable],[4,3,mutable],[place(3,2),1,mutable],[2,1,mutable]].
+
 :- end_tests(ctx_borrowing).
+
+
+:- begin_tests(follow_deref).
+
+% TODO: This test case currently fails and needs to be fixed
+test(follow_deref_1) :-
+        Stmts = [funcall(4,borrow_mut_F,[3])
+                ,funcall(3,struct_with_mutref_ew3p_at_p2_new_F_testonly,[2])
+                ,funcall(2,borrow_mut_F,[1])
+                ,funcall(1,enum_with_3_places_new_F_testonly,[])
+                ],
+        follow_deref(Stmts, [], place(deref(place(deref(X),2)),3), place(1,3)), !,
+        X = 4.
+
+:- end_tests(follow_deref).
 
 
 :- begin_tests(ctx_borrowing_liveness).
@@ -428,6 +478,25 @@ test(ctx_pinning_5) :-
                 ],
         findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
         Results = [[place(3,1),moved],[1,unpinned]].
+
+test(ctx_pinning_6) :-
+        Stmts = [funcall(3,move_pin_inner_F_testonly,[2])
+                ,funcall(2,pin_macro_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
+        Results = [[place(2,0),moved]].
+
+test(ctx_pinning_7) :-
+        Stmts = [funcall(6,pin_new_unchecked_F_testonly,[5])
+                ,funcall(5,extract_mutref_to_ew3p_p3_F_testonly,[4])
+                ,funcall(4,borrow_mut_F,[3])
+                ,funcall(3,struct_with_mutref_ew3p_at_p2_new_F_testonly,[2])
+                ,funcall(2,borrow_mut_F,[1])
+                ,funcall(1,enum_with_3_places_new_F_testonly,[])
+                ],
+        findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
+        Results = [[place(1,3),pinned],[3,unpinned],[1,unpinned]].
 
 test(ctx_pinning_generate_1) :-
         length(Stmts, 2),
