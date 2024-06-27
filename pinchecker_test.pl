@@ -3,7 +3,7 @@
 % File: pinchecker_test.pl
 % Description: Test cases for module(pinchecker)
 %
-% Version: 0.3.6
+% Version: 0.3.7
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(plunit)).
@@ -57,7 +57,7 @@ pinchecker:fn_rpil(option_none_F,
 pinchecker:fn_rpil(pin_macro_F,
         [rpil_kill(op(1))
         ,rpil_deref_pin(op(0))
-        ,rpil_borrow_mut(op(0), place(op(0),0))
+        ,rpil_borrow_mut(op(0), place(op(0),extern))
         ,rpil_move(op(1))
         ]).
 pinchecker:fn_rpil(unmovable_new_F_testonly,
@@ -301,7 +301,7 @@ test(ctx_borrowing_9) :-
                 ,funcall(1,unmovable_new_F_testonly,[])
                 ],
         findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
-        Results = [[2,place(2,0),mutable]].
+        Results = [[2,place(2,extern),mutable]].
 
 test(ctx_borrowing_10) :-
         Stmts = [funcall(3,borrow_mut_option_p1_F_testonly,[2])
@@ -521,7 +521,7 @@ test(ctx_pinning_6) :-
                 ,funcall(1,unmovable_new_F_testonly,[])
                 ],
         findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
-        Results = [[place(2,0),moved]].
+        Results = [[place(2,extern),moved]].
 
 test(ctx_pinning_7) :-
         Stmts = [funcall(6,pin_new_unchecked_F_testonly,[5])
@@ -545,6 +545,14 @@ test(ctx_pinning_8) :-
                 ],
         findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
         Results = [[place(1,3),moved]].
+
+test(ctx_pinning_9) :-
+        Stmts = [funcall(3,move_F,[2])
+                ,funcall(2,pin_macro_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])
+                ],
+        findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
+        Results = [[place(2,extern),pinned]].
 
 test(ctx_pinning_generate_1) :-
         length(Stmts, 2),
