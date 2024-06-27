@@ -3,7 +3,7 @@
 % File: pinchecker.pl
 % Description: Generate Rust code that violates the Pin contract
 %
-% Version: 0.3.5
+% Version: 0.3.6
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- module(pinchecker, [
@@ -240,7 +240,7 @@ follow_deref(_, _, X, X) :- nonvar(X).
 %
 %  @param Stmts         List of statements
 %  @param Place         The place to check
-%  @param Status        'unpinned', 'pinned' or 'moved'
+%  @param Status        'pinned' or 'moved'
 %
 ctx_pinning(Stmts, Place, Status) :-
         ground(Stmts), ground(Place),
@@ -261,17 +261,11 @@ ctx_pinning_partial(Stmts, [], Place, Status) :-
         ctx_pinning(Stmts, Place, Status).
 ctx_pinning_partial(Stmts, Insts, Place, Status) :-
         Insts = [Inst|InstsR],
-        (   ctx_borrowing_partial(Stmts, Insts, _, Place, _),
-            \+ ctx_borrowing_partial(Stmts, InstsR, _, Place, _),
-            Status = unpinned
+        (   Inst = rpil_deref_pin(BrwPlace),
+            ctx_borrowing_partial(Stmts, InstsR, BrwPlace, Place, _),
+            Status = pinned
         ;   ctx_pinning_partial(Stmts, InstsR, Place, StatusR),
-            (   StatusR = unpinned ->
-                (   Inst = rpil_deref_pin(BrwPlace),
-                    ctx_borrowing_partial(Stmts, InstsR, BrwPlace, Place, _) ->
-                    Status = pinned
-                ;   Status = unpinned
-                )
-            ;   StatusR = pinned ->
+            (   StatusR = pinned ->
                 (   Inst = rpil_deref_move(BrwConPlace),
                     ctx_borrowing_partial(Stmts, InstsR, BrwConPlace, ConPlace, _),
                     contagious_origin(Place, ConPlace) ->

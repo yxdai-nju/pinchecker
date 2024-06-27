@@ -3,7 +3,7 @@
 % File: pinchecker_test.pl
 % Description: Test cases for module(pinchecker)
 %
-% Version: 0.3.5
+% Version: 0.3.6
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(plunit)).
@@ -342,7 +342,7 @@ test(ctx_borrowing_12_enum) :-
 test(ctx_borrowing_generate_1) :-
         Stmts = [S5
                 ,S4
-                ,S3
+                ,funcall(3,struct_with_mutref_ew3p_at_p2_new_F_testonly,[S3Arg1])
                 ,funcall(2,borrow_mut_F,[1])
                 ,funcall(1,enum_with_3_places_new_F_testonly,[])
                 ],
@@ -352,7 +352,7 @@ test(ctx_borrowing_generate_1) :-
         ctx_typing(Stmts, 3, _), !,
         S5 = funcall(5,extract_mutref_to_ew3p_p3_F_testonly,[4]),
         S4 = funcall(4,borrow_mut_F,[3]),
-        S3 = funcall(3,struct_with_mutref_ew3p_at_p2_new_F_testonly,[2]).
+        S3Arg1 = 2.
 
 %test(ctx_borrowing_generate_1_full) :-
 %        Stmts = [S5
@@ -447,8 +447,7 @@ test(ctx_pinning_unpinned_1) :-
         Stmts = [funcall(2,borrow_mut_F,[1])
                 ,funcall(1,unmovable_new_F_testonly,[])
                 ],
-        ctx_pinning(Stmts, 1, unpinned), !, Stmts = [_|StmtsR],
-        \+ ctx_pinning(StmtsR, _, _).
+        \+ ctx_pinning(Stmts, _, _).
 
 test(ctx_pinning_1) :-
         Stmts = [funcall(3,pin_new_unchecked_F_testonly,[2])
@@ -491,7 +490,7 @@ test(ctx_pinning_3) :-
                 ,funcall(1,unmovable_new_F_testonly,[])
                 ],
         findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
-        Results = [[place(3,1),unpinned],[1,pinned]].
+        Results = [[1,pinned]].
 
 test(ctx_pinning_4) :-
         Stmts = [funcall(7,pin_new_unchecked_F_testonly,[5])
@@ -514,7 +513,7 @@ test(ctx_pinning_5) :-
                 ,funcall(1,unmovable_new_F_testonly,[])
                 ],
         findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
-        Results = [[place(3,1),moved],[1,unpinned]].
+        Results = [[place(3,1),moved]].
 
 test(ctx_pinning_6) :-
         Stmts = [funcall(3,move_pin_inner_F_testonly,[2])
@@ -533,7 +532,7 @@ test(ctx_pinning_7) :-
                 ,funcall(1,enum_with_3_places_new_F_testonly,[])
                 ],
         findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
-        Results = [[place(1,3),pinned],[3,unpinned],[1,unpinned]].
+        Results = [[place(1,3),pinned]].
 
 test(ctx_pinning_8) :-
         Stmts = [funcall(7,move_F,[1])
@@ -545,7 +544,7 @@ test(ctx_pinning_8) :-
                 ,funcall(1,enum_with_3_places_new_F_testonly,[])
                 ],
         findall([Place, Status], ctx_pinning(Stmts, Place, Status), Results), !,
-        Results = [[place(1,3),moved],[3,unpinned],[1,unpinned]].
+        Results = [[place(1,3),moved]].
 
 test(ctx_pinning_generate_1) :-
         length(Stmts, 2),
@@ -566,7 +565,7 @@ test(ctx_pinning_generate_2) :-
 test(ctx_pinning_generate_3) :-
         Stmts = [S7
                 ,S6
-                ,funcall(5,extract_mutref_to_ew3p_p3_F_testonly,[4])
+                ,funcall(5,extract_mutref_to_ew3p_p3_F_testonly,[S5Arg1])
                 ,funcall(4,borrow_mut_F,[3])
                 ,funcall(3,struct_with_mutref_ew3p_at_p2_new_F_testonly,[2])
                 ,funcall(2,borrow_mut_F,[1])
@@ -574,9 +573,11 @@ test(ctx_pinning_generate_3) :-
                 ],
         ctx_pinning(Stmts, place(1,3), moved),
         ctx_typing(Stmts, 7, _),
-        ctx_typing(Stmts, 6, _), !,
+        ctx_typing(Stmts, 6, _),
+        ctx_typing(Stmts, 5, _), !,
         S7 = funcall(7,move_F,[1]),
-        S6 = funcall(6,pin_new_unchecked_F_testonly,[5]).
+        S6 = funcall(6,pin_new_unchecked_F_testonly,[5]),
+        S5Arg1 = 4.
 
 %test(ctx_pinning_generate_3_full) :-
 %        Stmts = [S7
