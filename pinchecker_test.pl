@@ -3,7 +3,7 @@
 % File: pinchecker_test.pl
 % Description: Test cases for module(pinchecker)
 %
-% Version: 0.3.7
+% Version: 0.3.8
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(plunit)).
@@ -24,7 +24,8 @@ pinchecker:fn_typing(unmovable_new_F_testonly, [], unmovable_T_testonly).
 pinchecker:fn_typing(borrow_option_p1_F_testonly, [option_T(T)], ref_T(T)).
 pinchecker:fn_typing(borrow_mut_option_p1_F_testonly, [option_T(T)], mutref_T(T)).
 pinchecker:fn_typing(non_copy_storage_F_testonly, [T], ncs_T_testonly(T)).
-pinchecker:fn_typing(pin_new_unchecked_F_testonly, [mutref_T(T)], pin_T(mutref_T(T))).
+pinchecker:fn_typing(pin_new_unchecked_F_testonly, [Ptr], pin_T(Ptr)) :-
+        pinchecker:impl_trait(Ptr, deref_Tr(_)).
 pinchecker:fn_typing(kill_two_F_testonly, [_, _], unit_T).
 pinchecker:fn_typing(move_two_F_testonly, [_, _], unit_T).
 pinchecker:fn_typing(borrow_mut_and_pin_F_testonly, [_], unit_T).
@@ -111,8 +112,12 @@ pinchecker:fn_rpil(extract_mutref_to_ew3p_p3_F_testonly,
         ]).
 
 
-pinchecker:impl_trait(ref_T(_), copy_Tr).
-pinchecker:impl_trait(option_T(T), copy_Tr) :- pinchecker:impl_trait(T, copy_Tr).
+pinchecker:impl_trait(ref_T(_), copy_Tr) :- !.
+pinchecker:impl_trait(option_T(T), copy_Tr) :-
+        pinchecker:impl_trait(T, copy_Tr).
+pinchecker:impl_trait(ref_T(T), deref_Tr(target(T))).
+pinchecker:impl_trait(mutref_T(T), deref_Tr(target(T))).
+pinchecker:impl_trait(mutref_T(T), derefmut_Tr(target(T))).
 
 % =============================================================================
 
@@ -155,6 +160,16 @@ test(ctx_typing_3) :-
                 ,funcall(1,unmovable_new_F_testonly,[])
                 ],
         findall(Var, ctx_typing(Stmts, Var, unmovable_T_testonly), [3,2,1]).
+
+test(ctx_typing_trait_1) :-
+        Stmts = [funcall(3,pin_new_unchecked_F_testonly,[2])
+                ,funcall(2,borrow_F,[1])
+                ,funcall(1,unmovable_new_F_testonly,[])],
+        findall([Var, Type], ctx_typing(Stmts, Var, Type), Results), !,
+        Results = [[3,pin_T(ref_T(unmovable_T_testonly))]
+                  ,[2,ref_T(unmovable_T_testonly)]
+                  ,[1,unmovable_T_testonly]
+                  ].
 
 test(lives_even_after_killing_1) :-
         lives_even_after_killing(mutref_T(_)).
