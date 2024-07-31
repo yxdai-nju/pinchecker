@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker.m
-% Version: 0.0.3
+% Version: 0.0.4
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides an compilable implementation of PinChecker.
@@ -31,10 +31,19 @@
 
 :- type rs_func
     --->    move_F
+    ;       borrow_F
+    ;       store_two_new_F
     ;       unmovable_new_F.
 
 :- type rs_type
-    --->    unmovable_T.
+    --->    ref_T(rs_type)
+    ;       store_two_T(rs_type, rs_type)
+    ;       unmovable_T.
+
+:- type rs_trait
+    --->    copy_Tr
+    ;       deref_Tr(rs_type)
+    ;       derefmut_Tr(rs_type).
 
 :- type rs_stmt
     --->    rs_stmt(
@@ -62,13 +71,18 @@
     ;       rpil_deref_move(rpil_op)
     ;       rpil_deref_pin(rpil_op).
 
+:- type var_liveness
+    --->    alive
+    ;       dead.
+
 %---------------------------------------------------------------------------%
 
 main(!IO) :-
-    StmtsUninit = uninit_stmts(2),
+    StmtsUninit = uninit_stmts(4),
     solutions(
         (pred(Stmts::out) is nondet :-
-            ctx_typing(StmtsUninit, Stmts, 2, unmovable_T)
+            Type = store_two_T(unmovable_T, ref_T(unmovable_T)),
+            ctx_typing(StmtsUninit, Stmts, 4, Type)
         ),
         Solutions
     ),
@@ -78,18 +92,32 @@ main(!IO) :-
     io.format("%s\n", [s(Repr)], !IO).
 
 :- pred fn_typing(rs_func, list(rs_type), rs_type).
-:- mode fn_typing(in, out, in) is det.
+:- mode fn_typing(in, in, out) is semidet.
+:- mode fn_typing(in, out, in) is semidet.
 :- mode fn_typing(out, out, in) is multi.
 
 fn_typing(move_F, [T], T).
+fn_typing(borrow_F, [T], ref_T(T)).
+fn_typing(store_two_new_F, [T1, T2], store_two_T(T1, T2)).
 fn_typing(unmovable_new_F, [], unmovable_T).
 
 :- func fn_rpil(rs_func) = list(rpil_inst).
 
-fn_rpil(move_F) = [
-    rpil_bind(arg(0),arg(1)),
-    rpil_move(arg(1))].
-fn_rpil(unmovable_new_F) = [].
+fn_rpil(move_F) =
+    [ rpil_bind(arg(0), arg(1))
+    , rpil_move(arg(1))
+    ].
+fn_rpil(borrow_F) =
+    [ rpil_borrow(arg(0), arg(1))
+    ].
+fn_rpil(store_two_new_F) =
+    [ rpil_bind(place(arg(0),1), arg(1))
+    , rpil_bind(place(arg(0),2), arg(2))
+    , rpil_move(arg(1))
+    , rpil_move(arg(2))
+    ].
+fn_rpil(unmovable_new_F) =
+    [ ].
 
     % Reduce the RPIL (Reference Provenance Intermediate Language)
     % instructions for a given function
@@ -165,40 +193,88 @@ rpil_term_reduction(Ops, deref(Term)) =
 uninit_stmts(L) = Stmts :-
     ( L > 0 ->
         Stmt = rs_stmt_uninit(L),
-        Stmts = [Stmt|uninit_stmts(L - 1)]
+        Stmts = [Stmt | uninit_stmts(L - 1)]
     ; L = 0 ->
         Stmts = []
     ;
         unexpected($pred, "invalid length")
     ).
 
-    % Determine the type of a variable in the context of given statements
+    % Checks if a variable has a specific type
+    %
+:- pred ctx_typing_check(list(rs_stmt), int, rs_type).
+:- mode ctx_typing_check(in, in, in) is semidet.
+
+ctx_typing_check([], _, _) :-
+    unexpected($pred, "cannot check types on empty stataments").
+ctx_typing_check([Stmt | StmtsR], Var, Type) :-
+    Stmt = rs_stmt_uninit(L),
+    ( Var = L ->
+        unexpected($pred, "cannot check types of uninitialized statements")
+    ;
+        ctx_typing_check(StmtsR, Var, Type)
+    ).
+ctx_typing_check([Stmt | StmtsR]::in, Var::in, Type::in) :-
+    Stmt = rs_stmt(L, Fn, Args),
+    ( Var = L ->
+        fn_typing(Fn, ArgTypes, Type),
+        list.map(ctx_typing_check(StmtsR), Args, ArgTypes)
+    ;
+        ctx_typing_check(StmtsR, Var, Type)
+    ).
+
+    % Get the type of a variable
+    %
+:- pred ctx_typing_gettype(list(rs_stmt), int, rs_type).
+:- mode ctx_typing_gettype(in, in, out) is semidet.
+
+ctx_typing_gettype([], _, _) :-
+    unexpected($pred, "cannot get types from empty stataments").
+ctx_typing_gettype([Stmt | StmtsR], Var, Type) :-
+    Stmt = rs_stmt_uninit(L),
+    ( Var = L ->
+        unexpected($pred, "cannot get types from uninitialized stataments")
+    ;
+        ctx_typing_gettype(StmtsR, Var, Type)
+    ).
+ctx_typing_gettype([Stmt | StmtsR], Var, Type) :-
+    Stmt = rs_stmt(L, Fn, Args),
+    ( Var = L ->
+        list.map(ctx_typing_gettype(StmtsR), Args, ArgTypes),
+        fn_typing(Fn, ArgTypes, Type)
+    ;
+        ctx_typing_gettype(StmtsR, Var, Type)
+    ).
+
+    % Generate statements by applying typing constraints
     %
 :- pred ctx_typing(list(rs_stmt), list(rs_stmt), int, rs_type).
 :- mode ctx_typing(in, out, in, in) is nondet.
 
 ctx_typing([], _, _, _) :-
     unexpected($pred, "cannot pose typing constraints on empty stataments").
-ctx_typing([Stmt_in|StmtsR_in], Stmts_out, Var, Type) :-
+ctx_typing(Stmts_in, Stmts_out, Var, Type) :-
+    Stmts_in = [Stmt_in | StmtsR_in],
     Stmt_in = rs_stmt_uninit(L),
     ( Var = L ->
         fn_typing(Fn, ArgTypes, Type),
         list.map(ctx_typing_findvar(StmtsR_in), ArgTypes, Args),
         Stmt_out = rs_stmt(L, Fn, Args),
         apply_ctx_typing_chain(StmtsR_in, StmtsR_out, Args, ArgTypes),
-        Stmts_out = [Stmt_out|StmtsR_out]
+        Stmts_out = [Stmt_out | StmtsR_out]
     ;
         ctx_typing(StmtsR_in, StmtsR_out, Var, Type),
-        Stmts_out = [Stmt_in|StmtsR_out]
+        Stmts_out = [Stmt_in | StmtsR_out]
     ).
-ctx_typing([Stmt_in|StmtsR_in], Stmts_out, Var, Type) :-
+ctx_typing(Stmts_in, Stmts_out, Var, Type) :-
+    Stmts_in = [Stmt_in | StmtsR_in],
     Stmt_in = rs_stmt(L, _Fn, _Args),
     ( Var = L ->
-        % `Stmt_in' should produce the same type as `Type'
-        Stmts_out = [Stmt_in|StmtsR_in]
+        ctx_typing_check(Stmts_in, Var, Type),
+        Stmts_out = [Stmt_in | StmtsR_in]
     ;
         ctx_typing(StmtsR_in, StmtsR_out, Var, Type),
-        Stmts_out = [Stmt_in|StmtsR_out]
+        Stmts_out = [Stmt_in | StmtsR_out]
     ).
 
     % Find a variable that could possibly be of a certain type
@@ -207,7 +283,7 @@ ctx_typing([Stmt_in|StmtsR_in], Stmts_out, Var, Type) :-
 :- mode ctx_typing_findvar(in, in, out) is nondet.
 
 ctx_typing_findvar(Stmts, Type, Var) :-
-    Stmts = [Stmt|StmtsR],
+    Stmts = [Stmt | StmtsR],
     (
         (
             Stmt = rs_stmt(L, Fn, _Args),
@@ -217,7 +293,8 @@ ctx_typing_findvar(Stmts, Type, Var) :-
         ),
         Var = L
     ;
-        ctx_typing_findvar(StmtsR, Type, Var)
+        ctx_typing_findvar(StmtsR, Type, Var),
+        ctx_liveness_check(StmtsR, Var, alive)
     ).
 
     % Apply typing constraints to pairs of variables and types
@@ -227,9 +304,41 @@ ctx_typing_findvar(Stmts, Type, Var) :-
 
 apply_ctx_typing_chain(In, Out, [], []) :- 
     Out = In.
-apply_ctx_typing_chain(In, Out, [Var|VarsR], [Type|TypesR]) :-
+apply_ctx_typing_chain(In, Out, [Var | VarsR], [Type | TypesR]) :-
     ctx_typing(In, Mid, Var, Type),
     apply_ctx_typing_chain(Mid, Out, VarsR, TypesR).
+
+    % Check the liveness of a variable
+    %
+:- pred ctx_liveness_check(list(rs_stmt), int, var_liveness).
+:- mode ctx_liveness_check(in, in, in) is semidet.
+
+ctx_liveness_check([], _, Liveness) :-
+    Liveness = dead.
+ctx_liveness_check([Stmt | _], Var, Liveness) :-
+    Stmt = rs_stmt_uninit(L),
+    Liveness = ( Var = L -> alive ; dead ).
+ctx_liveness_check([Stmt | StmtsR], Var, Liveness) :-
+    Stmt = rs_stmt(_L, Fn, Args),
+    ( list.member(Var, Args) ->
+        ( list.map(ctx_typing_gettype(StmtsR), Args, ArgTypes),
+          fn_typing(Fn, ArgTypes, Type),
+          lives_even_after_killing(Type) ->
+            Liveness = alive
+        ;
+            Liveness = dead
+        ),
+        ctx_liveness_check(StmtsR, Var, alive)
+    ;
+        ctx_liveness_check(StmtsR, Var, Liveness)
+    ).
+
+:- pred lives_even_after_killing(rs_type).
+:- mode lives_even_after_killing(in) is det.
+
+lives_even_after_killing(_) :-
+    % TODO: fill in with real implementation
+    true.
 
 %---------------------------------------------------------------------------%
 %
@@ -239,10 +348,19 @@ apply_ctx_typing_chain(In, Out, [Var|VarsR], [Type|TypesR]) :-
 :- func debug_rs_func(rs_func) = string.
 
 debug_rs_func(move_F) = "move".
+debug_rs_func(borrow_F) = "borrow".
+debug_rs_func(store_two_new_F) = "StoreTwo::new".
 debug_rs_func(unmovable_new_F) = "Unmovable::new".
 
 :- func debug_rs_type(rs_type) = string.
 
+debug_rs_type(ref_T(T)) =
+    string.format("&%s", [s(TR)]) :-
+    TR = debug_rs_type(T).
+debug_rs_type(store_two_T(T1, T2)) =
+    string.format("StoreTwo<%s, %s>", [s(T1R), s(T2R)]) :-
+    T1R = debug_rs_type(T1),
+    T2R = debug_rs_type(T2).
 debug_rs_type(unmovable_T) = "Unmovable".
 
 :- func debug_rs_stmt(rs_stmt) = string.
