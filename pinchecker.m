@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker.m
-% Version: 0.0.4
+% Version: 0.0.5
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides an compilable implementation of PinChecker.
@@ -32,11 +32,13 @@
 :- type rs_func
     --->    move_F
     ;       borrow_F
+    ;       borrow_mut_F
     ;       store_two_new_F
     ;       unmovable_new_F.
 
 :- type rs_type
     --->    ref_T(rs_type)
+    ;       mutref_T(rs_type)
     ;       store_two_T(rs_type, rs_type)
     ;       unmovable_T.
 
@@ -98,6 +100,7 @@ main(!IO) :-
 
 fn_typing(move_F, [T], T).
 fn_typing(borrow_F, [T], ref_T(T)).
+fn_typing(borrow_mut_F, [T], mutref_T(T)).
 fn_typing(store_two_new_F, [T1, T2], store_two_T(T1, T2)).
 fn_typing(unmovable_new_F, [], unmovable_T).
 
@@ -110,6 +113,9 @@ fn_rpil(move_F) =
 fn_rpil(borrow_F) =
     [ rpil_borrow(arg(0), arg(1))
     ].
+fn_rpil(borrow_mut_F) =
+    [ rpil_borrow_mut(arg(0), arg(1))
+    ].
 fn_rpil(store_two_new_F) =
     [ rpil_bind(place(arg(0),1), arg(1))
     , rpil_bind(place(arg(0),2), arg(2))
@@ -118,6 +124,13 @@ fn_rpil(store_two_new_F) =
     ].
 fn_rpil(unmovable_new_F) =
     [ ].
+
+:- pred impl_trait(rs_type, rs_trait).
+:- mode impl_trait(in, in) is semidet.
+
+impl_trait(ref_T(_), copy_Tr).
+impl_trait(ref_T(T), deref_Tr(T)).
+impl_trait(mutref_T(T), derefmut_Tr(T)).
 
     % Reduce the RPIL (Reference Provenance Intermediate Language)
     % instructions for a given function
@@ -261,6 +274,12 @@ ctx_typing(Stmts_in, Stmts_out, Var, Type) :-
         list.map(ctx_typing_findvar(StmtsR_in), ArgTypes, Args),
         Stmt_out = rs_stmt(L, Fn, Args),
         apply_ctx_typing_chain(StmtsR_in, StmtsR_out, Args, ArgTypes),
+        list.all_true(
+            (pred(Arg::in) is semidet :-
+                ctx_liveness_check(StmtsR_out, Arg, alive)
+            ),
+            Args
+        ),
         Stmts_out = [Stmt_out | StmtsR_out]
     ;
         ctx_typing(StmtsR_in, StmtsR_out, Var, Type),
@@ -293,8 +312,7 @@ ctx_typing_findvar(Stmts, Type, Var) :-
         ),
         Var = L
     ;
-        ctx_typing_findvar(StmtsR, Type, Var),
-        ctx_liveness_check(StmtsR, Var, alive)
+        ctx_typing_findvar(StmtsR, Type, Var)
     ).
 
     % Apply typing constraints to pairs of variables and types
@@ -313,17 +331,21 @@ apply_ctx_typing_chain(In, Out, [Var | VarsR], [Type | TypesR]) :-
 :- pred ctx_liveness_check(list(rs_stmt), int, var_liveness).
 :- mode ctx_liveness_check(in, in, in) is semidet.
 
-ctx_liveness_check([], _, Liveness) :-
-    Liveness = dead.
+ctx_liveness_check([], _, dead).
 ctx_liveness_check([Stmt | _], Var, Liveness) :-
     Stmt = rs_stmt_uninit(L),
-    Liveness = ( Var = L -> alive ; dead ).
+    Liveness = alive.
 ctx_liveness_check([Stmt | StmtsR], Var, Liveness) :-
-    Stmt = rs_stmt(_L, Fn, Args),
-    ( list.member(Var, Args) ->
-        ( list.map(ctx_typing_gettype(StmtsR), Args, ArgTypes),
-          fn_typing(Fn, ArgTypes, Type),
-          lives_even_after_killing(Type) ->
+    Stmt = rs_stmt(L, Fn, Args),
+    ( Var = L ->
+        Liveness = alive
+    ; list.member(Var, Args) ->
+        ( Fn = borrow_F ->
+            Liveness = alive
+        ; Fn = borrow_mut_F ->
+            Liveness = alive
+        ; ctx_typing_gettype(StmtsR, Var, VarType),
+          lives_even_after_killing(VarType) ->
             Liveness = alive
         ;
             Liveness = dead
@@ -334,11 +356,11 @@ ctx_liveness_check([Stmt | StmtsR], Var, Liveness) :-
     ).
 
 :- pred lives_even_after_killing(rs_type).
-:- mode lives_even_after_killing(in) is det.
+:- mode lives_even_after_killing(in) is semidet.
 
-lives_even_after_killing(_) :-
-    % TODO: fill in with real implementation
-    true.
+lives_even_after_killing(mutref_T(_)).
+lives_even_after_killing(Type) :-
+    impl_trait(Type, copy_Tr).
 
 %---------------------------------------------------------------------------%
 %
@@ -348,7 +370,8 @@ lives_even_after_killing(_) :-
 :- func debug_rs_func(rs_func) = string.
 
 debug_rs_func(move_F) = "move".
-debug_rs_func(borrow_F) = "borrow".
+debug_rs_func(borrow_F) = "&".
+debug_rs_func(borrow_mut_F) = "&mut ".
 debug_rs_func(store_two_new_F) = "StoreTwo::new".
 debug_rs_func(unmovable_new_F) = "Unmovable::new".
 
@@ -356,6 +379,9 @@ debug_rs_func(unmovable_new_F) = "Unmovable::new".
 
 debug_rs_type(ref_T(T)) =
     string.format("&%s", [s(TR)]) :-
+    TR = debug_rs_type(T).
+debug_rs_type(mutref_T(T)) =
+    string.format("&mut %s", [s(TR)]) :-
     TR = debug_rs_type(T).
 debug_rs_type(store_two_T(T1, T2)) =
     string.format("StoreTwo<%s, %s>", [s(T1R), s(T2R)]) :-
@@ -379,10 +405,9 @@ debug_rs_stmt(rs_stmt_uninit(Line)) =
 
 :- func debug_rs_stmts(list(rs_stmt)) = string.
 
-debug_rs_stmts(Stmts) = Repr :-
+debug_rs_stmts(Stmts) = string.join_list("\n", Reprs) :-
     RevReprs = list.map(debug_rs_stmt, Stmts),
-    Reprs = list.reverse(RevReprs),
-    Repr = string.join_list("\n", Reprs).
+    Reprs = list.reverse(RevReprs).
 
 :- func debug_rpil_op(rpil_op) = string.
 
@@ -422,9 +447,13 @@ debug_rpil_inst(rpil_deref_pin(Op)) =
 
 :- func debug_rpil_insts(list(rpil_inst)) = string.
 
-debug_rpil_insts(Insts) = Repr :-
-    Reprs = list.map(debug_rpil_inst, Insts),
-    Repr = string.join_list("\n", Reprs).
+debug_rpil_insts(Insts) = string.join_list("\n", Reprs) :-
+    Reprs = list.map(debug_rpil_inst, Insts).
+
+:- func debug_liveness(var_liveness) = string.
+
+debug_liveness(alive) = "alive".
+debug_liveness(dead) = "dead".
 
 %---------------------------------------------------------------------------%
 :- end_module pinchecker.
