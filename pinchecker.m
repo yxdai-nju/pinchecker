@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker.m
-% Version: 0.0.6
+% Version: 0.0.7
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides an compilable implementation of PinChecker.
@@ -77,6 +77,10 @@
     --->    alive
     ;       dead.
 
+:- type borrow_kind
+    --->    shared
+    ;       mutable.
+
 %---------------------------------------------------------------------------%
 
 main(!IO) :-
@@ -84,7 +88,8 @@ main(!IO) :-
     solutions(
         (pred(Stmts::out) is nondet :-
             Type = store_two_T(unmovable_T, ref_T(unmovable_T)),
-            ctx_typing(StmtsUninit, Stmts, 4, Type)
+            ctx_typing(StmtsUninit, Stmts, 4, Type),
+            ctx_borrowing_check(Stmts, var(2), var(1), shared)
         ),
         Solutions
     ),
@@ -219,8 +224,6 @@ uninit_stmts(L) = Stmts :-
 :- pred ctx_typing_check(list(rs_stmt), int, rs_type).
 :- mode ctx_typing_check(in, in, out) is semidet.
 
-ctx_typing_check([], _, _) :-
-    unexpected($pred, "cannot check types on empty stataments").
 ctx_typing_check([Stmt | StmtsR], Var, Type) :-
     Stmt = rs_stmt(L, Fn, Args),
     ( Var = L ->
@@ -232,7 +235,7 @@ ctx_typing_check([Stmt | StmtsR], Var, Type) :-
 ctx_typing_check([Stmt | StmtsR], Var, Type) :-
     Stmt = rs_stmt_uninit(L),
     ( Var = L ->
-        unexpected($pred, "cannot check types of uninitialized stataments")
+        false
     ;
         ctx_typing_check(StmtsR, Var, Type)
     ).
@@ -242,8 +245,6 @@ ctx_typing_check([Stmt | StmtsR], Var, Type) :-
 :- pred ctx_typing(list(rs_stmt), list(rs_stmt), int, rs_type).
 :- mode ctx_typing(in, out, in, in) is nondet.
 
-ctx_typing([], _, _, _) :-
-    unexpected($pred, "cannot pose typing constraints on empty stataments").
 ctx_typing(Stmts_in, Stmts_out, Var, Type) :-
     Stmts_in = [Stmt_in | StmtsR_in],
     Stmt_in = rs_stmt_uninit(L),
@@ -312,8 +313,6 @@ apply_ctx_typing_chain(In, Out, [Var | VarsR], [Type | TypesR]) :-
 :- pred ctx_liveness_check(list(rs_stmt), int, var_liveness).
 :- mode ctx_liveness_check(in, in, out) is semidet.
 
-ctx_liveness_check([], _, _) :-
-    unexpected($pred, "cannot check liveness on empty stataments").
 ctx_liveness_check([Stmt | _], _, Liveness) :-
     Stmt = rs_stmt_uninit(_L),
     Liveness = alive.
@@ -322,6 +321,7 @@ ctx_liveness_check([Stmt | StmtsR], Var, Liveness) :-
     ( Var = L ->
         Liveness = alive
     ; list.member(Var, Args) ->
+        ctx_liveness_check(StmtsR, Var, alive),
         ( Fn = borrow_F ->
             Liveness = alive
         ; Fn = borrow_mut_F ->
@@ -331,8 +331,7 @@ ctx_liveness_check([Stmt | StmtsR], Var, Liveness) :-
             Liveness = alive
         ;
             Liveness = dead
-        ),
-        ctx_liveness_check(StmtsR, Var, alive)
+        )
     ;
         ctx_liveness_check(StmtsR, Var, Liveness)
     ).
@@ -343,6 +342,53 @@ ctx_liveness_check([Stmt | StmtsR], Var, Liveness) :-
 lives_even_after_killing(mutref_T(_)).
 lives_even_after_killing(Type) :-
     impl_trait(Type, copy_Tr).
+
+    % Check borrowing relationships between RPIL places
+    %
+    % This can also be used to get the RHS and the kind of a borrow
+    %
+:- pred ctx_borrowing_check(list(rs_stmt), rpil_op, rpil_op, borrow_kind).
+:- mode ctx_borrowing_check(in, in, in, out) is semidet.
+
+ctx_borrowing_check(Stmts, Lhs, Rhs, Kind) :-
+    Stmts = [Stmt | StmtsR],
+    Stmt = rs_stmt(L, Fn, Args),
+    RpilInsts = fn_rpil_reduced(Fn, [L | Args]),
+    ctx_borrowing_check_partial(StmtsR, RpilInsts, Lhs, Rhs, Kind),
+    ctx_liveness_check(Stmts, origin(Lhs), alive),
+    ctx_liveness_check(Stmts, origin(Rhs), alive).
+ctx_borrowing_check(Stmts, Lhs, Rhs, Kind) :-
+    Stmts = [Stmt | StmtsR],
+    Stmt = rs_stmt_uninit(_L),
+    ctx_borrowing_check(StmtsR, Lhs, Rhs, Kind).
+
+:- pred ctx_borrowing_check_partial(list(rs_stmt), list(rpil_inst), rpil_op, rpil_op, borrow_kind).
+:- mode ctx_borrowing_check_partial(in, in, in, in, out) is semidet.
+
+ctx_borrowing_check_partial(Stmts, [], Lhs, Rhs, Kind) :-
+    ctx_borrowing_check(Stmts, Lhs, Rhs, Kind).
+ctx_borrowing_check_partial(Stmts, Insts, Lhs, Rhs, Kind) :-
+    Insts = [Inst | InstsR],
+    ( Inst = rpil_borrow(Lhs, Rhs) ->
+        Kind = shared
+    ; Inst = rpil_borrow_mut(Lhs, Rhs) ->
+        Kind = mutable
+    ; Inst = rpil_bind(Lhs, Mid),
+      ctx_borrowing_check_partial(Stmts, InstsR, Mid, Rhs, KindR) ->
+        Kind = KindR
+    ;
+        ctx_borrowing_check_partial(Stmts, InstsR, Lhs, Rhs, Kind)
+    ).
+
+:- func origin(rpil_op) = int.
+
+origin(arg(_)) =
+    unexpected($pred, "cannot determine origin before RPIL reduction").
+origin(var(X)) = X.
+origin(place(X0, _)) = origin(X0).
+origin(place_ext(X0)) = origin(X0).
+origin(variant_place(X0, _, _)) = origin(X0).
+origin(deref(X0)) = origin(X0).
 
 %---------------------------------------------------------------------------%
 %
@@ -436,6 +482,11 @@ debug_rpil_insts(Insts) = string.join_list("\n", Reprs) :-
 
 debug_liveness(alive) = "alive".
 debug_liveness(dead) = "dead".
+
+:- func debug_borrow_kind(borrow_kind) = string.
+
+debug_borrow_kind(shared) = "shared".
+debug_borrow_kind(mutable) = "mutable".
 
 %---------------------------------------------------------------------------%
 :- end_module pinchecker.
