@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker.m
-% Version: 0.0.7
+% Version: 0.0.8
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides an compilable implementation of PinChecker.
@@ -33,12 +33,14 @@
     --->    move_F
     ;       borrow_F
     ;       borrow_mut_F
+    ;       store_new_F
     ;       store_two_new_F
     ;       unmovable_new_F.
 
 :- type rs_type
     --->    ref_T(rs_type)
     ;       mutref_T(rs_type)
+    ;       store_T(rs_type)
     ;       store_two_T(rs_type, rs_type)
     ;       unmovable_T.
 
@@ -84,12 +86,24 @@
 %---------------------------------------------------------------------------%
 
 main(!IO) :-
+    % TestStmts = [
+    %     rs_stmt(4, move_F, [3]),
+    %     rs_stmt(3, store_new_F, [2]),
+    %     rs_stmt(2, borrow_F, [1]),
+    %     rs_stmt(1, unmovable_new_F, [])
+    % ],
+    % io.format("%s\n", [s(debug_rs_stmts(TestStmts))], !IO),
+    % ( ctx_borrowing(TestStmts, place(var(4),1), var(1), shared) ->
+    %     io.print("succeeds\n", !IO)
+    % ;
+    %     io.print("failed\n", !IO)
+    % ).
     StmtsUninit = uninit_stmts(4),
     solutions(
         (pred(Stmts::out) is nondet :-
-            Type = store_two_T(unmovable_T, ref_T(unmovable_T)),
-            ctx_typing(StmtsUninit, Stmts, 4, Type),
-            ctx_borrowing_check(Stmts, var(2), var(1), shared)
+            Type = store_T(ref_T(unmovable_T)),
+            ctx_typing_gen(StmtsUninit, Stmts, 4, Type),
+            ctx_borrowing(Stmts, place(var(4),1), var(1), shared)
         ),
         Solutions
     ),
@@ -105,6 +119,7 @@ main(!IO) :-
 fn_typing(move_F, [T], T).
 fn_typing(borrow_F, [T], ref_T(T)).
 fn_typing(borrow_mut_F, [T], mutref_T(T)).
+fn_typing(store_new_F, [T], store_T(T)).
 fn_typing(store_two_new_F, [T1, T2], store_two_T(T1, T2)).
 fn_typing(unmovable_new_F, [], unmovable_T).
 
@@ -119,6 +134,10 @@ fn_rpil(borrow_F) =
     ].
 fn_rpil(borrow_mut_F) =
     [ rpil_borrow_mut(arg(0), arg(1))
+    ].
+fn_rpil(store_new_F) =
+    [ rpil_bind(place(arg(0),1), arg(1))
+    , rpil_move(arg(1))
     ].
 fn_rpil(store_two_new_F) =
     [ rpil_bind(place(arg(0),1), arg(1))
@@ -221,59 +240,70 @@ uninit_stmts(L) = Stmts :-
     %
     % This can also be used to get the type of a specific variable
     %
-:- pred ctx_typing_check(list(rs_stmt), int, rs_type).
-:- mode ctx_typing_check(in, in, out) is semidet.
+:- pred ctx_typing(list(rs_stmt), int, rs_type).
+:- mode ctx_typing(in, in, out) is semidet.
 
-ctx_typing_check([Stmt | StmtsR], Var, Type) :-
+ctx_typing([Stmt | StmtsR], Var, Type) :-
     Stmt = rs_stmt(L, Fn, Args),
     ( Var = L ->
-        list.map(ctx_typing_check(StmtsR), Args, ArgTypes),
+        list.map(ctx_typing(StmtsR), Args, ArgTypes),
         fn_typing(Fn, ArgTypes, Type)
     ;
-        ctx_typing_check(StmtsR, Var, Type)
+        ctx_typing(StmtsR, Var, Type)
     ).
-ctx_typing_check([Stmt | StmtsR], Var, Type) :-
+ctx_typing([Stmt | StmtsR], Var, Type) :-
     Stmt = rs_stmt_uninit(L),
     ( Var = L ->
         false
     ;
-        ctx_typing_check(StmtsR, Var, Type)
+        ctx_typing(StmtsR, Var, Type)
     ).
 
     % Generate statements by applying typing constraints
     %
-:- pred ctx_typing(list(rs_stmt), list(rs_stmt), int, rs_type).
-:- mode ctx_typing(in, out, in, in) is nondet.
+:- pred ctx_typing_gen(list(rs_stmt), list(rs_stmt), int, rs_type).
+:- mode ctx_typing_gen(in, out, in, in) is nondet.
 
-ctx_typing(Stmts_in, Stmts_out, Var, Type) :-
+ctx_typing_gen(Stmts_in, Stmts_out, Var, Type) :-
     Stmts_in = [Stmt_in | StmtsR_in],
     Stmt_in = rs_stmt_uninit(L),
     ( Var = L ->
         fn_typing(Fn, ArgTypes, Type),
         list.map(ctx_typing_findvar(StmtsR_in), ArgTypes, Args),
         Stmt_out = rs_stmt(L, Fn, Args),
-        apply_ctx_typing_chain(StmtsR_in, StmtsR_out, Args, ArgTypes),
+        ctx_typing_gen_chain(StmtsR_in, StmtsR_out, Args, ArgTypes),
         list.all_true(
             (pred(Arg::in) is semidet :-
-                ctx_liveness_check(StmtsR_out, Arg, alive)
+                ctx_liveness(StmtsR_out, Arg, alive)
             ),
             Args
         ),
         Stmts_out = [Stmt_out | StmtsR_out]
     ;
-        ctx_typing(StmtsR_in, StmtsR_out, Var, Type),
+        ctx_typing_gen(StmtsR_in, StmtsR_out, Var, Type),
         Stmts_out = [Stmt_in | StmtsR_out]
     ).
-ctx_typing(Stmts_in, Stmts_out, Var, Type) :-
+ctx_typing_gen(Stmts_in, Stmts_out, Var, Type) :-
     Stmts_in = [Stmt_in | StmtsR_in],
     Stmt_in = rs_stmt(L, _Fn, _Args),
     ( Var = L ->
-        ctx_typing_check(Stmts_in, Var, Type),
+        ctx_typing(Stmts_in, Var, Type),
         Stmts_out = [Stmt_in | StmtsR_in]
     ;
-        ctx_typing(StmtsR_in, StmtsR_out, Var, Type),
+        ctx_typing_gen(StmtsR_in, StmtsR_out, Var, Type),
         Stmts_out = [Stmt_in | StmtsR_out]
     ).
+
+    % Apply typing constraints to pairs of variables and types
+    %
+:- pred ctx_typing_gen_chain(list(rs_stmt), list(rs_stmt), list(int), list(rs_type)).
+:- mode ctx_typing_gen_chain(in, out, in, in) is nondet.
+
+ctx_typing_gen_chain(In, Out, [], []) :- 
+    Out = In.
+ctx_typing_gen_chain(In, Out, [Var | VarsR], [Type | TypesR]) :-
+    ctx_typing_gen(In, Mid, Var, Type),
+    ctx_typing_gen_chain(Mid, Out, VarsR, TypesR).
 
     % Find a variable that could possibly be of a certain type
     %
@@ -286,7 +316,7 @@ ctx_typing_findvar(Stmts, Type, Var) :-
         (
             Stmt = rs_stmt(L, Fn, Args),
             fn_typing(Fn, ArgTypes, Type),
-            list.map(ctx_typing_check(StmtsR), Args, ArgTypes)
+            list.map(ctx_typing(StmtsR), Args, ArgTypes)
         ;
             Stmt = rs_stmt_uninit(L)
         ),
@@ -295,45 +325,34 @@ ctx_typing_findvar(Stmts, Type, Var) :-
         ctx_typing_findvar(StmtsR, Type, Var)
     ).
 
-    % Apply typing constraints to pairs of variables and types
-    %
-:- pred apply_ctx_typing_chain(list(rs_stmt), list(rs_stmt), list(int), list(rs_type)).
-:- mode apply_ctx_typing_chain(in, out, in, in) is nondet.
-
-apply_ctx_typing_chain(In, Out, [], []) :- 
-    Out = In.
-apply_ctx_typing_chain(In, Out, [Var | VarsR], [Type | TypesR]) :-
-    ctx_typing(In, Mid, Var, Type),
-    apply_ctx_typing_chain(Mid, Out, VarsR, TypesR).
-
     % Check the liveness of a variable
     %
     % This can also be used to get the liveness of a specific variable
     %
-:- pred ctx_liveness_check(list(rs_stmt), int, var_liveness).
-:- mode ctx_liveness_check(in, in, out) is semidet.
+:- pred ctx_liveness(list(rs_stmt), int, var_liveness).
+:- mode ctx_liveness(in, in, out) is semidet.
 
-ctx_liveness_check([Stmt | _], _, Liveness) :-
+ctx_liveness([Stmt | _], _, Liveness) :-
     Stmt = rs_stmt_uninit(_L),
     Liveness = alive.
-ctx_liveness_check([Stmt | StmtsR], Var, Liveness) :-
+ctx_liveness([Stmt | StmtsR], Var, Liveness) :-
     Stmt = rs_stmt(L, Fn, Args),
     ( Var = L ->
         Liveness = alive
     ; list.member(Var, Args) ->
-        ctx_liveness_check(StmtsR, Var, alive),
+        ctx_liveness(StmtsR, Var, alive),
         ( Fn = borrow_F ->
             Liveness = alive
         ; Fn = borrow_mut_F ->
             Liveness = alive
-        ; ctx_typing_check(StmtsR, Var, VarType),
+        ; ctx_typing(StmtsR, Var, VarType),
           lives_even_after_killing(VarType) ->
             Liveness = alive
         ;
             Liveness = dead
         )
     ;
-        ctx_liveness_check(StmtsR, Var, Liveness)
+        ctx_liveness(StmtsR, Var, Liveness)
     ).
 
 :- pred lives_even_after_killing(rs_type).
@@ -347,37 +366,58 @@ lives_even_after_killing(Type) :-
     %
     % This can also be used to get the RHS and the kind of a borrow
     %
-:- pred ctx_borrowing_check(list(rs_stmt), rpil_op, rpil_op, borrow_kind).
-:- mode ctx_borrowing_check(in, in, in, out) is semidet.
+:- pred ctx_borrowing(list(rs_stmt), rpil_op, rpil_op, borrow_kind).
+:- mode ctx_borrowing(in, in, out, out) is semidet.
 
-ctx_borrowing_check(Stmts, Lhs, Rhs, Kind) :-
+ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
     Stmts = [Stmt | StmtsR],
     Stmt = rs_stmt(L, Fn, Args),
     RpilInsts = fn_rpil_reduced(Fn, [L | Args]),
-    ctx_borrowing_check_partial(StmtsR, RpilInsts, Lhs, Rhs, Kind),
-    ctx_liveness_check(Stmts, origin(Lhs), alive),
-    ctx_liveness_check(Stmts, origin(Rhs), alive).
-ctx_borrowing_check(Stmts, Lhs, Rhs, Kind) :-
+    ctx_borrowing_partial(StmtsR, RpilInsts, Lhs, Rhs, Kind),
+    ctx_liveness(Stmts, origin(Lhs), alive),
+    ctx_liveness(Stmts, origin(Rhs), alive).
+ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
     Stmts = [Stmt | StmtsR],
     Stmt = rs_stmt_uninit(_L),
-    ctx_borrowing_check(StmtsR, Lhs, Rhs, Kind).
+    ctx_borrowing(StmtsR, Lhs, Rhs, Kind).
 
-:- pred ctx_borrowing_check_partial(list(rs_stmt), list(rpil_inst), rpil_op, rpil_op, borrow_kind).
-:- mode ctx_borrowing_check_partial(in, in, in, in, out) is semidet.
+:- pred ctx_borrowing_partial(list(rs_stmt), list(rpil_inst), rpil_op, rpil_op, borrow_kind).
+:- mode ctx_borrowing_partial(in, in, in, out, out) is semidet.
 
-ctx_borrowing_check_partial(Stmts, [], Lhs, Rhs, Kind) :-
-    ctx_borrowing_check(Stmts, Lhs, Rhs, Kind).
-ctx_borrowing_check_partial(Stmts, Insts, Lhs, Rhs, Kind) :-
+ctx_borrowing_partial(Stmts, [], Lhs, Rhs, Kind) :-
+    ctx_borrowing(Stmts, Lhs, Rhs, Kind).
+ctx_borrowing_partial(Stmts, Insts, Lhs, Rhs, Kind) :-
     Insts = [Inst | InstsR],
-    ( Inst = rpil_borrow(Lhs, Rhs) ->
+    ( Inst = rpil_borrow(OpL, OpR),
+      follow_deref(Stmts, Insts, OpL, Lhs) ->
+        follow_deref(Stmts, Insts, OpR, Rhs),
         Kind = shared
-    ; Inst = rpil_borrow_mut(Lhs, Rhs) ->
+    ; Inst = rpil_borrow_mut(OpL, OpR),
+      follow_deref(Stmts, Insts, OpL, Lhs) ->
+        follow_deref(Stmts, Insts, OpR, Rhs),
         Kind = mutable
-    ; Inst = rpil_bind(Lhs, Mid),
-      ctx_borrowing_check_partial(Stmts, InstsR, Mid, Rhs, KindR) ->
-        Kind = KindR
+    ; Inst = rpil_bind(OpL, OpR),
+      follow_deref(Stmts, Insts, OpL, OpLFD),
+      follow_deref(Stmts, Insts, OpR, OpRFD),
+      replace_origin(Lhs, OpLFD, OpRFD, Bound) ->
+        ctx_borrowing_partial(Stmts, InstsR, Bound, Rhs, Kind)
     ;
-        ctx_borrowing_check_partial(Stmts, InstsR, Lhs, Rhs, Kind)
+        ctx_borrowing_partial(Stmts, InstsR, Lhs, Rhs, Kind)
+    ).
+
+:- pred follow_deref(list(rs_stmt), list(rpil_inst), rpil_op, rpil_op).
+:- mode follow_deref(in, in, in, out) is semidet.
+
+follow_deref(Stmts, Insts, Op0, Op) :-
+    (   Op0 = arg(_),
+        unexpected($pred, "cannot follow dereferences before RPIL reduction")
+    ;   Op0 = var(_), Op = Op0
+    ;   Op0 = place(_, _), Op = Op0
+    ;   Op0 = place_ext(_), Op = Op0
+    ;   Op0 = variant_place(_, _, _), Op = Op0
+    ;   Op0 = deref(Op1),
+        follow_deref(Stmts, Insts, Op1, Op2),
+        ctx_borrowing_partial(Stmts, Insts, Op2, Op, _Kind)
     ).
 
 :- func origin(rpil_op) = int.
@@ -390,6 +430,32 @@ origin(place_ext(X0)) = origin(X0).
 origin(variant_place(X0, _, _)) = origin(X0).
 origin(deref(X0)) = origin(X0).
 
+:- pred replace_origin(rpil_op, rpil_op, rpil_op, rpil_op).
+:- mode replace_origin(in, in, in, out) is semidet.
+
+replace_origin(X0, X, Y, Y0) :-
+    ( X = X0 ->
+        Y0 = Y
+    ;
+        (
+            X0 = place(X1, P),
+            replace_origin(X1, X, Y, Y1),
+            Y0 = place(Y1, P)
+        ;
+            X0 = place_ext(X1),
+            replace_origin(X1, X, Y, Y1),
+            Y0 = place_ext(Y1)
+        ;
+            X0 = variant_place(X1, V, P),
+            replace_origin(X1, X, Y, Y1),
+            Y0 = variant_place(Y1, V, P)
+        ;
+            X0 = deref(X1),
+            replace_origin(X1, X, Y, Y1),
+            Y0 = deref(Y1)
+        )
+    ).
+
 %---------------------------------------------------------------------------%
 %
 % Debug utilities: Convert `rs_*' structures to string representations
@@ -400,6 +466,7 @@ origin(deref(X0)) = origin(X0).
 debug_rs_func(move_F) = "move".
 debug_rs_func(borrow_F) = "&".
 debug_rs_func(borrow_mut_F) = "&mut ".
+debug_rs_func(store_new_F) = "Store::new".
 debug_rs_func(store_two_new_F) = "StoreTwo::new".
 debug_rs_func(unmovable_new_F) = "Unmovable::new".
 
@@ -410,6 +477,9 @@ debug_rs_type(ref_T(T)) =
     TR = debug_rs_type(T).
 debug_rs_type(mutref_T(T)) =
     string.format("&mut %s", [s(TR)]) :-
+    TR = debug_rs_type(T).
+debug_rs_type(store_T(T)) =
+    string.format("Store<%s>", [s(TR)]) :-
     TR = debug_rs_type(T).
 debug_rs_type(store_two_T(T1, T2)) =
     string.format("StoreTwo<%s, %s>", [s(T1R), s(T2R)]) :-
