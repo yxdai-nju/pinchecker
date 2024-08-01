@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker.m
-% Version: 0.0.5
+% Version: 0.0.6
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides an compilable implementation of PinChecker.
@@ -95,7 +95,6 @@ main(!IO) :-
 
 :- pred fn_typing(rs_func, list(rs_type), rs_type).
 :- mode fn_typing(in, in, out) is semidet.
-:- mode fn_typing(in, out, in) is semidet.
 :- mode fn_typing(out, out, in) is multi.
 
 fn_typing(move_F, [T], T).
@@ -215,48 +214,27 @@ uninit_stmts(L) = Stmts :-
 
     % Checks if a variable has a specific type
     %
+    % This can also be used to get the type of a specific variable
+    %
 :- pred ctx_typing_check(list(rs_stmt), int, rs_type).
-:- mode ctx_typing_check(in, in, in) is semidet.
+:- mode ctx_typing_check(in, in, out) is semidet.
 
 ctx_typing_check([], _, _) :-
     unexpected($pred, "cannot check types on empty stataments").
 ctx_typing_check([Stmt | StmtsR], Var, Type) :-
-    Stmt = rs_stmt_uninit(L),
-    ( Var = L ->
-        unexpected($pred, "cannot check types of uninitialized statements")
-    ;
-        ctx_typing_check(StmtsR, Var, Type)
-    ).
-ctx_typing_check([Stmt | StmtsR]::in, Var::in, Type::in) :-
     Stmt = rs_stmt(L, Fn, Args),
     ( Var = L ->
-        fn_typing(Fn, ArgTypes, Type),
-        list.map(ctx_typing_check(StmtsR), Args, ArgTypes)
-    ;
-        ctx_typing_check(StmtsR, Var, Type)
-    ).
-
-    % Get the type of a variable
-    %
-:- pred ctx_typing_gettype(list(rs_stmt), int, rs_type).
-:- mode ctx_typing_gettype(in, in, out) is semidet.
-
-ctx_typing_gettype([], _, _) :-
-    unexpected($pred, "cannot get types from empty stataments").
-ctx_typing_gettype([Stmt | StmtsR], Var, Type) :-
-    Stmt = rs_stmt_uninit(L),
-    ( Var = L ->
-        unexpected($pred, "cannot get types from uninitialized stataments")
-    ;
-        ctx_typing_gettype(StmtsR, Var, Type)
-    ).
-ctx_typing_gettype([Stmt | StmtsR], Var, Type) :-
-    Stmt = rs_stmt(L, Fn, Args),
-    ( Var = L ->
-        list.map(ctx_typing_gettype(StmtsR), Args, ArgTypes),
+        list.map(ctx_typing_check(StmtsR), Args, ArgTypes),
         fn_typing(Fn, ArgTypes, Type)
     ;
-        ctx_typing_gettype(StmtsR, Var, Type)
+        ctx_typing_check(StmtsR, Var, Type)
+    ).
+ctx_typing_check([Stmt | StmtsR], Var, Type) :-
+    Stmt = rs_stmt_uninit(L),
+    ( Var = L ->
+        unexpected($pred, "cannot check types of uninitialized stataments")
+    ;
+        ctx_typing_check(StmtsR, Var, Type)
     ).
 
     % Generate statements by applying typing constraints
@@ -305,8 +283,9 @@ ctx_typing_findvar(Stmts, Type, Var) :-
     Stmts = [Stmt | StmtsR],
     (
         (
-            Stmt = rs_stmt(L, Fn, _Args),
-            fn_typing(Fn, _ArgTypes, Type)
+            Stmt = rs_stmt(L, Fn, Args),
+            fn_typing(Fn, ArgTypes, Type),
+            list.map(ctx_typing_check(StmtsR), Args, ArgTypes)
         ;
             Stmt = rs_stmt_uninit(L)
         ),
@@ -328,12 +307,15 @@ apply_ctx_typing_chain(In, Out, [Var | VarsR], [Type | TypesR]) :-
 
     % Check the liveness of a variable
     %
+    % This can also be used to get the liveness of a specific variable
+    %
 :- pred ctx_liveness_check(list(rs_stmt), int, var_liveness).
-:- mode ctx_liveness_check(in, in, in) is semidet.
+:- mode ctx_liveness_check(in, in, out) is semidet.
 
-ctx_liveness_check([], _, dead).
-ctx_liveness_check([Stmt | _], Var, Liveness) :-
-    Stmt = rs_stmt_uninit(L),
+ctx_liveness_check([], _, _) :-
+    unexpected($pred, "cannot check liveness on empty stataments").
+ctx_liveness_check([Stmt | _], _, Liveness) :-
+    Stmt = rs_stmt_uninit(_L),
     Liveness = alive.
 ctx_liveness_check([Stmt | StmtsR], Var, Liveness) :-
     Stmt = rs_stmt(L, Fn, Args),
@@ -344,7 +326,7 @@ ctx_liveness_check([Stmt | StmtsR], Var, Liveness) :-
             Liveness = alive
         ; Fn = borrow_mut_F ->
             Liveness = alive
-        ; ctx_typing_gettype(StmtsR, Var, VarType),
+        ; ctx_typing_check(StmtsR, Var, VarType),
           lives_even_after_killing(VarType) ->
             Liveness = alive
         ;
