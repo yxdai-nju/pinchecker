@@ -28,7 +28,8 @@ Mercury.modules
 *.d
 *.c_date
 # compiled files and executables
-pinchecker
+/pinchecker
+/pinchecker_test
 
 # macOS
 .DS_Store

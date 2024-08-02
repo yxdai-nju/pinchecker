@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker.m
-% Version: 0.0.8
+% Version: 0.1.0
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides an compilable implementation of PinChecker.
@@ -12,53 +12,24 @@
 :- module pinchecker.
 :- interface.
 
-:- import_module io.
-
-%---------------------------------------------------------------------------%
-
-:- pred main(io::di, io::uo) is det.
-
-%---------------------------------------------------------------------------%
-%---------------------------------------------------------------------------%
-
-:- implementation.
-
-:- import_module int.
 :- import_module list.
-:- import_module require.
-:- import_module solutions.
-:- import_module string.
 
-:- type rs_func
-    --->    move_F
-    ;       borrow_F
-    ;       borrow_mut_F
-    ;       store_new_F
-    ;       store_two_new_F
-    ;       unmovable_new_F.
+%---------------------------------------------------------------------------%
 
-:- type rs_type
-    --->    ref_T(rs_type)
-    ;       mutref_T(rs_type)
-    ;       store_T(rs_type)
-    ;       store_two_T(rs_type, rs_type)
-    ;       unmovable_T.
-
-:- type rs_trait
-    --->    copy_Tr
-    ;       deref_Tr(rs_type)
-    ;       derefmut_Tr(rs_type).
-
-:- type rs_stmt
+    % Represents a Rust-style statement
+    %
+:- type rs_stmt(Func)
     --->    rs_stmt(
-                line    :: int,
-                fn      :: rs_func,
-                args    :: list(int)
+                int,        % line number
+                Func,       % function called
+                list(int)   % arguments (variable indices)
             )
     ;       rs_stmt_uninit(
-                line1   :: int
+                int         % line number
             ).
 
+    % Defines RPIL (Reference Provenance Intermediate Language) operators
+    %
 :- type rpil_op
     --->    arg(int)
     ;       var(int)
@@ -67,6 +38,8 @@
     ;       variant_place(rpil_op, int, int)
     ;       deref(rpil_op).
 
+    % Defines RPIL instructions
+    %
 :- type rpil_inst
     --->    rpil_bind(rpil_op, rpil_op)
     ;       rpil_move(rpil_op)
@@ -75,156 +48,179 @@
     ;       rpil_deref_move(rpil_op)
     ;       rpil_deref_pin(rpil_op).
 
-:- type var_liveness
-    --->    alive
-    ;       dead.
-
+    % Defines types of borrowing in Rust
+    %
 :- type borrow_kind
     --->    shared
     ;       mutable.
 
+    % Defines variable liveness states in Rust
+    %
+:- type var_liveness
+    --->    alive
+    ;       dead.
+
+    % Typeclass for Rust functions, types and trait implementations
+    %
+:- typeclass rust_tc(Func, Type, Trait) <= (
+    showable(Func),
+    (Func -> Type),
+    (Type -> Func, Trait)
+) where [
+        % Returns the RPIL instructions for a given function
+        %
+    func fn_rpil_tcm(Func) = list(rpil_inst),
+
+        % Checks if a function preserves its arguments' liveness states after
+        % being called (e.g., borrow/borrow_mut)
+        %
+    pred does_not_kill_arguments_tcm(Func),
+    mode does_not_kill_arguments_tcm(in) is semidet,
+
+        % Determines function return type by providing argument types, or
+        % list all possible "function - argument type" pairs, by providing
+        % the return type
+        %
+    pred fn_typing_tcm(Func, list(Type), Type),
+    mode fn_typing_tcm(in, in, out) is semidet,
+    mode fn_typing_tcm(out, out, in) is multi,
+
+        % Checks if a type lives even after being killed (e.g., shared
+        % references, types that implement `Copy' trait)
+        %
+    pred lives_even_after_killing_tcm(Type),
+    mode lives_even_after_killing_tcm(in) is semidet,
+
+        % Checks if a type implements a trait
+        %
+    pred impl_trait_tcm(Type, Trait),
+    mode impl_trait_tcm(in, in) is semidet
+].
+
+:- typeclass showable(T) where [
+    func show(T) = string
+].
+
+    % Creates a list of uninitialized statements
+    %
+:- func uninit_stmts(int) = list(rs_stmt(Func)) <= rust_tc(Func, Type, Trait).
+
+    % Generates statements by applying typing constraints
+    %
+:- pred ctx_typing_gen(list(rs_stmt(Func)), list(rs_stmt(Func)), int, Type) <= rust_tc(Func, Type, Trait).
+:- mode ctx_typing_gen(in, out, in, in) is nondet.
+
+%---------------------%
+
+    % Checks/retrieves the type of a variable
+    %
+:- pred ctx_typing(list(rs_stmt(Func)), int, Type) <= rust_tc(Func, Type, Trait).
+:- mode ctx_typing(in, in, out) is semidet.
+
+    % Checks/retrieves the liveness state of a variable
+    %
+:- pred ctx_liveness(list(rs_stmt(Func)), int, var_liveness) <= rust_tc(Func, Type, Trait).
+:- mode ctx_liveness(in, in, out) is semidet.
+
+    % Checks/retrieves borrowing relationships between RPIL operators (get
+    % RHS and borrow kind, by providing LHS)
+    %
+:- pred ctx_borrowing(list(rs_stmt(Func)), rpil_op, rpil_op, borrow_kind) <= rust_tc(Func, Type, Trait).
+:- mode ctx_borrowing(in, in, out, out) is semidet.
+
+%---------------------%
+
+:- func show_rs_stmt(rs_stmt(Func)) = string <= showable(Func).
+
+:- func show_rs_stmts(list(rs_stmt(Func))) = string <= showable(Func).
+
+%---------------------------------------------------------------------------%
 %---------------------------------------------------------------------------%
 
-main(!IO) :-
-    % TestStmts = [
-    %     rs_stmt(4, move_F, [3]),
-    %     rs_stmt(3, store_new_F, [2]),
-    %     rs_stmt(2, borrow_F, [1]),
-    %     rs_stmt(1, unmovable_new_F, [])
-    % ],
-    % io.format("%s\n", [s(debug_rs_stmts(TestStmts))], !IO),
-    % ( ctx_borrowing(TestStmts, place(var(4),1), var(1), shared) ->
-    %     io.print("succeeds\n", !IO)
-    % ;
-    %     io.print("failed\n", !IO)
-    % ).
-    StmtsUninit = uninit_stmts(4),
-    solutions(
-        (pred(Stmts::out) is nondet :-
-            Type = store_T(ref_T(unmovable_T)),
-            ctx_typing_gen(StmtsUninit, Stmts, 4, Type),
-            ctx_borrowing(Stmts, place(var(4),1), var(1), shared)
-        ),
-        Solutions
-    ),
-    Reprs = list.map(debug_rs_stmts, Solutions),
-    Sep = "\n--------------------------------\n",
-    Repr = string.join_list(Sep, Reprs),
-    io.format("%s\n", [s(Repr)], !IO).
+:- implementation.
 
-:- pred fn_typing(rs_func, list(rs_type), rs_type).
-:- mode fn_typing(in, in, out) is semidet.
-:- mode fn_typing(out, out, in) is multi.
+:- import_module int.
+:- import_module require.
+:- import_module string.
 
-fn_typing(move_F, [T], T).
-fn_typing(borrow_F, [T], ref_T(T)).
-fn_typing(borrow_mut_F, [T], mutref_T(T)).
-fn_typing(store_new_F, [T], store_T(T)).
-fn_typing(store_two_new_F, [T1, T2], store_two_T(T1, T2)).
-fn_typing(unmovable_new_F, [], unmovable_T).
+%---------------------------------------------------------------------------%
 
-:- func fn_rpil(rs_func) = list(rpil_inst).
+%---------------------%
+%
+% Performs RPIL reduction
+%
 
-fn_rpil(move_F) =
-    [ rpil_bind(arg(0), arg(1))
-    , rpil_move(arg(1))
-    ].
-fn_rpil(borrow_F) =
-    [ rpil_borrow(arg(0), arg(1))
-    ].
-fn_rpil(borrow_mut_F) =
-    [ rpil_borrow_mut(arg(0), arg(1))
-    ].
-fn_rpil(store_new_F) =
-    [ rpil_bind(place(arg(0),1), arg(1))
-    , rpil_move(arg(1))
-    ].
-fn_rpil(store_two_new_F) =
-    [ rpil_bind(place(arg(0),1), arg(1))
-    , rpil_bind(place(arg(0),2), arg(2))
-    , rpil_move(arg(1))
-    , rpil_move(arg(2))
-    ].
-fn_rpil(unmovable_new_F) =
-    [ ].
-
-:- pred impl_trait(rs_type, rs_trait).
-:- mode impl_trait(in, in) is semidet.
-
-impl_trait(ref_T(_), copy_Tr).
-impl_trait(ref_T(T), deref_Tr(T)).
-impl_trait(mutref_T(T), derefmut_Tr(T)).
-
-    % Reduce the RPIL (Reference Provenance Intermediate Language)
-    % instructions for a given function
+    % Reduces the RPIL instructions for a given function
     %
-:- func fn_rpil_reduced(rs_func, list(int)) = list(rpil_inst).
+:- func fn_rpil_reduced(Func, list(int)) = list(rpil_inst) <= rust_tc(Func, Type, Trait).
 
-fn_rpil_reduced(Fn, Ops) = RpilReduced :-
-    Rpil = fn_rpil(Fn),
-    RpilReduced = rpil_reduction(Ops, Rpil).
-
-    % Reduce a list of RPIL instructions
+    % Reduces a list of RPIL instructions
     %
 :- func rpil_reduction(list(int), list(rpil_inst)) = list(rpil_inst).
 
-rpil_reduction(Ops, Rpil) = RpilReduced :-
-    RpilReduced = list.map(rpil_inst_reduction(Ops), Rpil).
-
-    % Reduce a single RPIL instruction
+    % Reduces a single RPIL instruction
     %
 :- func rpil_inst_reduction(list(int), rpil_inst) = rpil_inst.
 
-rpil_inst_reduction(Ops, rpil_bind(Term1, Term2)) =
-    rpil_bind(TermR1, TermR2) :-
-    TermR1 = rpil_term_reduction(Ops, Term1),
-    TermR2 = rpil_term_reduction(Ops, Term2).
-rpil_inst_reduction(Ops, rpil_move(Term)) =
-    rpil_move(TermR) :-
-    TermR = rpil_term_reduction(Ops, Term).
-rpil_inst_reduction(Ops, rpil_borrow(Term1, Term2)) =
-    rpil_borrow(TermR1, TermR2) :-
-    TermR1 = rpil_term_reduction(Ops, Term1),
-    TermR2 = rpil_term_reduction(Ops, Term2).
-rpil_inst_reduction(Ops, rpil_borrow_mut(Term1, Term2)) =
-    rpil_borrow_mut(TermR1, TermR2) :-
-    TermR1 = rpil_term_reduction(Ops, Term1),
-    TermR2 = rpil_term_reduction(Ops, Term2).
-rpil_inst_reduction(Ops, rpil_deref_move(Term)) =
-    rpil_deref_move(TermR) :-
-    TermR = rpil_term_reduction(Ops, Term).
-rpil_inst_reduction(Ops, rpil_deref_pin(Term)) =
-    rpil_deref_pin(TermR) :-
-    TermR = rpil_term_reduction(Ops, Term).
-
-    % Reduce a term in an RPIL instruction
+    % Reduces a term in an RPIL instruction
     %
 :- func rpil_term_reduction(list(int), rpil_op) = rpil_op.
 
-rpil_term_reduction(Ops, arg(Idx)) = TermR :-
-    ( list.index0(Ops, Idx, Var) ->
-        TermR = var(Var)
-    ;
-        unexpected($pred, "invalid index")
-    ).
-rpil_term_reduction(_, var(_)) =
-    unexpected($pred, "cannot reduce a reduced RPIL operator").
-rpil_term_reduction(Ops, place(Term, P)) =
-    place(TermR, P) :-
-    TermR = rpil_term_reduction(Ops, Term).
-rpil_term_reduction(Ops, place_ext(Term)) =
-    place_ext(TermR) :-
-    TermR = rpil_term_reduction(Ops, Term).
-rpil_term_reduction(Ops, variant_place(Term, V, P)) =
-    variant_place(TermR, V, P) :-
-    TermR = rpil_term_reduction(Ops, Term).
-rpil_term_reduction(Ops, deref(Term)) =
-    deref(TermR) :-
-    TermR = rpil_term_reduction(Ops, Term).
+%---------------------%
+%
+% Relevant to the typing/borrowing context
+%
 
-    % Create a list of uninitialized statements
+    % Applies typing constraints to pairs of variables and types
     %
-:- func uninit_stmts(int) = list(rs_stmt).
+:- pred ctx_typing_gen_chain(list(rs_stmt(Func)), list(rs_stmt(Func)), list(int), list(Type)) <= rust_tc(Func, Type, Trait).
+:- mode ctx_typing_gen_chain(in, out, in, in) is nondet.
+
+    % Finds a variable that could possibly be of a certain type
+    %
+:- pred ctx_typing_findvar(list(rs_stmt(Func)), Type, int) <= rust_tc(Func, Type, Trait).
+:- mode ctx_typing_findvar(in, in, out) is nondet.
+
+    % Checks borrowing relationships between RPIL places, by providing not
+    % only statements, but also partially interpreted RPIL instructions of
+    % the next statement
+    %
+:- pred ctx_borrowing_partial(list(rs_stmt(Func)), list(rpil_inst), rpil_op, rpil_op, borrow_kind) <= rust_tc(Func, Type, Trait).
+:- mode ctx_borrowing_partial(in, in, in, out, out) is semidet.
+
+%---------------------%
+%
+% Relevant to RPIL operators
+%
+
+    % Interprets the RPIL `deref(_)' operator by following through borrows in
+    % the borrowing context
+    %
+:- pred follow_deref(list(rs_stmt(Func)), list(rpil_inst), rpil_op, rpil_op) <= rust_tc(Func, Type, Trait).
+:- mode follow_deref(in, in, in, out) is semidet.
+
+    % Gets the origin (variable index) of an RPIL operator
+    %
+:- func origin(rpil_op) = int.
+
+    % Replaces the origin of an RPIL operator
+    %
+:- pred replace_origin(rpil_op, rpil_op, rpil_op, rpil_op).
+:- mode replace_origin(in, in, in, out) is semidet.
+
+%---------------------%
+
+:- func show_rpil_op(rpil_op) = string.
+
+:- func show_rpil_inst(rpil_inst) = string.
+
+:- func show_rpil_insts(list(rpil_inst)) = string.
+
+:- func show_liveness(var_liveness) = string.
+
+:- func show_borrow_kind(borrow_kind) = string.
+
+%---------------------------------------------------------------------------%
 
 uninit_stmts(L) = Stmts :-
     ( L > 0 ->
@@ -236,39 +232,11 @@ uninit_stmts(L) = Stmts :-
         unexpected($pred, "invalid length")
     ).
 
-    % Checks if a variable has a specific type
-    %
-    % This can also be used to get the type of a specific variable
-    %
-:- pred ctx_typing(list(rs_stmt), int, rs_type).
-:- mode ctx_typing(in, in, out) is semidet.
-
-ctx_typing([Stmt | StmtsR], Var, Type) :-
-    Stmt = rs_stmt(L, Fn, Args),
-    ( Var = L ->
-        list.map(ctx_typing(StmtsR), Args, ArgTypes),
-        fn_typing(Fn, ArgTypes, Type)
-    ;
-        ctx_typing(StmtsR, Var, Type)
-    ).
-ctx_typing([Stmt | StmtsR], Var, Type) :-
-    Stmt = rs_stmt_uninit(L),
-    ( Var = L ->
-        false
-    ;
-        ctx_typing(StmtsR, Var, Type)
-    ).
-
-    % Generate statements by applying typing constraints
-    %
-:- pred ctx_typing_gen(list(rs_stmt), list(rs_stmt), int, rs_type).
-:- mode ctx_typing_gen(in, out, in, in) is nondet.
-
 ctx_typing_gen(Stmts_in, Stmts_out, Var, Type) :-
     Stmts_in = [Stmt_in | StmtsR_in],
     Stmt_in = rs_stmt_uninit(L),
     ( Var = L ->
-        fn_typing(Fn, ArgTypes, Type),
+        fn_typing_tcm(Fn, ArgTypes, Type),
         list.map(ctx_typing_findvar(StmtsR_in), ArgTypes, Args),
         Stmt_out = rs_stmt(L, Fn, Args),
         ctx_typing_gen_chain(StmtsR_in, StmtsR_out, Args, ArgTypes),
@@ -294,28 +262,18 @@ ctx_typing_gen(Stmts_in, Stmts_out, Var, Type) :-
         Stmts_out = [Stmt_in | StmtsR_out]
     ).
 
-    % Apply typing constraints to pairs of variables and types
-    %
-:- pred ctx_typing_gen_chain(list(rs_stmt), list(rs_stmt), list(int), list(rs_type)).
-:- mode ctx_typing_gen_chain(in, out, in, in) is nondet.
-
 ctx_typing_gen_chain(In, Out, [], []) :- 
     Out = In.
 ctx_typing_gen_chain(In, Out, [Var | VarsR], [Type | TypesR]) :-
     ctx_typing_gen(In, Mid, Var, Type),
     ctx_typing_gen_chain(Mid, Out, VarsR, TypesR).
 
-    % Find a variable that could possibly be of a certain type
-    %
-:- pred ctx_typing_findvar(list(rs_stmt), rs_type, int).
-:- mode ctx_typing_findvar(in, in, out) is nondet.
-
 ctx_typing_findvar(Stmts, Type, Var) :-
     Stmts = [Stmt | StmtsR],
     (
         (
             Stmt = rs_stmt(L, Fn, Args),
-            fn_typing(Fn, ArgTypes, Type),
+            fn_typing_tcm(Fn, ArgTypes, Type),
             list.map(ctx_typing(StmtsR), Args, ArgTypes)
         ;
             Stmt = rs_stmt_uninit(L)
@@ -325,12 +283,77 @@ ctx_typing_findvar(Stmts, Type, Var) :-
         ctx_typing_findvar(StmtsR, Type, Var)
     ).
 
-    % Check the liveness of a variable
-    %
-    % This can also be used to get the liveness of a specific variable
-    %
-:- pred ctx_liveness(list(rs_stmt), int, var_liveness).
-:- mode ctx_liveness(in, in, out) is semidet.
+%---------------------%
+
+fn_rpil_reduced(Fn, Ops) = RpilReduced :-
+    Rpil = fn_rpil_tcm(Fn),
+    RpilReduced = rpil_reduction(Ops, Rpil).
+
+rpil_reduction(Ops, Rpil) = RpilReduced :-
+    RpilReduced = list.map(rpil_inst_reduction(Ops), Rpil).
+
+rpil_inst_reduction(Ops, rpil_bind(Term1, Term2)) =
+    rpil_bind(TermR1, TermR2) :-
+    TermR1 = rpil_term_reduction(Ops, Term1),
+    TermR2 = rpil_term_reduction(Ops, Term2).
+rpil_inst_reduction(Ops, rpil_move(Term)) =
+    rpil_move(TermR) :-
+    TermR = rpil_term_reduction(Ops, Term).
+rpil_inst_reduction(Ops, rpil_borrow(Term1, Term2)) =
+    rpil_borrow(TermR1, TermR2) :-
+    TermR1 = rpil_term_reduction(Ops, Term1),
+    TermR2 = rpil_term_reduction(Ops, Term2).
+rpil_inst_reduction(Ops, rpil_borrow_mut(Term1, Term2)) =
+    rpil_borrow_mut(TermR1, TermR2) :-
+    TermR1 = rpil_term_reduction(Ops, Term1),
+    TermR2 = rpil_term_reduction(Ops, Term2).
+rpil_inst_reduction(Ops, rpil_deref_move(Term)) =
+    rpil_deref_move(TermR) :-
+    TermR = rpil_term_reduction(Ops, Term).
+rpil_inst_reduction(Ops, rpil_deref_pin(Term)) =
+    rpil_deref_pin(TermR) :-
+    TermR = rpil_term_reduction(Ops, Term).
+
+rpil_term_reduction(Ops, arg(Idx)) = TermR :-
+    ( list.index0(Ops, Idx, Var) ->
+        TermR = var(Var)
+    ;
+        unexpected($pred, "invalid index")
+    ).
+rpil_term_reduction(_, var(_)) =
+    unexpected($pred, "cannot reduce a reduced RPIL operator").
+rpil_term_reduction(Ops, place(Term, P)) =
+    place(TermR, P) :-
+    TermR = rpil_term_reduction(Ops, Term).
+rpil_term_reduction(Ops, place_ext(Term)) =
+    place_ext(TermR) :-
+    TermR = rpil_term_reduction(Ops, Term).
+rpil_term_reduction(Ops, variant_place(Term, V, P)) =
+    variant_place(TermR, V, P) :-
+    TermR = rpil_term_reduction(Ops, Term).
+rpil_term_reduction(Ops, deref(Term)) =
+    deref(TermR) :-
+    TermR = rpil_term_reduction(Ops, Term).
+
+%---------------------%
+
+ctx_typing([Stmt | StmtsR], Var, Type) :-
+    Stmt = rs_stmt(L, Fn, Args),
+    ( Var = L ->
+        list.map(ctx_typing(StmtsR), Args, ArgTypes),
+        fn_typing_tcm(Fn, ArgTypes, Type)
+    ;
+        ctx_typing(StmtsR, Var, Type)
+    ).
+ctx_typing([Stmt | StmtsR], Var, Type) :-
+    Stmt = rs_stmt_uninit(L),
+    ( Var = L ->
+        false
+    ;
+        ctx_typing(StmtsR, Var, Type)
+    ).
+
+%---------------------%
 
 ctx_liveness([Stmt | _], _, Liveness) :-
     Stmt = rs_stmt_uninit(_L),
@@ -341,12 +364,10 @@ ctx_liveness([Stmt | StmtsR], Var, Liveness) :-
         Liveness = alive
     ; list.member(Var, Args) ->
         ctx_liveness(StmtsR, Var, alive),
-        ( Fn = borrow_F ->
-            Liveness = alive
-        ; Fn = borrow_mut_F ->
+        ( does_not_kill_arguments_tcm(Fn) ->
             Liveness = alive
         ; ctx_typing(StmtsR, Var, VarType),
-          lives_even_after_killing(VarType) ->
+          lives_even_after_killing_tcm(VarType) ->
             Liveness = alive
         ;
             Liveness = dead
@@ -355,19 +376,7 @@ ctx_liveness([Stmt | StmtsR], Var, Liveness) :-
         ctx_liveness(StmtsR, Var, Liveness)
     ).
 
-:- pred lives_even_after_killing(rs_type).
-:- mode lives_even_after_killing(in) is semidet.
-
-lives_even_after_killing(mutref_T(_)).
-lives_even_after_killing(Type) :-
-    impl_trait(Type, copy_Tr).
-
-    % Check borrowing relationships between RPIL places
-    %
-    % This can also be used to get the RHS and the kind of a borrow
-    %
-:- pred ctx_borrowing(list(rs_stmt), rpil_op, rpil_op, borrow_kind).
-:- mode ctx_borrowing(in, in, out, out) is semidet.
+%---------------------%
 
 ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
     Stmts = [Stmt | StmtsR],
@@ -380,9 +389,6 @@ ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
     Stmts = [Stmt | StmtsR],
     Stmt = rs_stmt_uninit(_L),
     ctx_borrowing(StmtsR, Lhs, Rhs, Kind).
-
-:- pred ctx_borrowing_partial(list(rs_stmt), list(rpil_inst), rpil_op, rpil_op, borrow_kind).
-:- mode ctx_borrowing_partial(in, in, in, out, out) is semidet.
 
 ctx_borrowing_partial(Stmts, [], Lhs, Rhs, Kind) :-
     ctx_borrowing(Stmts, Lhs, Rhs, Kind).
@@ -405,8 +411,7 @@ ctx_borrowing_partial(Stmts, Insts, Lhs, Rhs, Kind) :-
         ctx_borrowing_partial(Stmts, InstsR, Lhs, Rhs, Kind)
     ).
 
-:- pred follow_deref(list(rs_stmt), list(rpil_inst), rpil_op, rpil_op).
-:- mode follow_deref(in, in, in, out) is semidet.
+%---------------------%
 
 follow_deref(Stmts, Insts, Op0, Op) :-
     (   Op0 = arg(_),
@@ -420,8 +425,6 @@ follow_deref(Stmts, Insts, Op0, Op) :-
         ctx_borrowing_partial(Stmts, Insts, Op2, Op, _Kind)
     ).
 
-:- func origin(rpil_op) = int.
-
 origin(arg(_)) =
     unexpected($pred, "cannot determine origin before RPIL reduction").
 origin(var(X)) = X.
@@ -429,9 +432,6 @@ origin(place(X0, _)) = origin(X0).
 origin(place_ext(X0)) = origin(X0).
 origin(variant_place(X0, _, _)) = origin(X0).
 origin(deref(X0)) = origin(X0).
-
-:- pred replace_origin(rpil_op, rpil_op, rpil_op, rpil_op).
-:- mode replace_origin(in, in, in, out) is semidet.
 
 replace_origin(X0, X, Y, Y0) :-
     ( X = X0 ->
@@ -457,40 +457,9 @@ replace_origin(X0, X, Y, Y0) :-
     ).
 
 %---------------------------------------------------------------------------%
-%
-% Debug utilities: Convert `rs_*' structures to string representations
-%
 
-:- func debug_rs_func(rs_func) = string.
-
-debug_rs_func(move_F) = "move".
-debug_rs_func(borrow_F) = "&".
-debug_rs_func(borrow_mut_F) = "&mut ".
-debug_rs_func(store_new_F) = "Store::new".
-debug_rs_func(store_two_new_F) = "StoreTwo::new".
-debug_rs_func(unmovable_new_F) = "Unmovable::new".
-
-:- func debug_rs_type(rs_type) = string.
-
-debug_rs_type(ref_T(T)) =
-    string.format("&%s", [s(TR)]) :-
-    TR = debug_rs_type(T).
-debug_rs_type(mutref_T(T)) =
-    string.format("&mut %s", [s(TR)]) :-
-    TR = debug_rs_type(T).
-debug_rs_type(store_T(T)) =
-    string.format("Store<%s>", [s(TR)]) :-
-    TR = debug_rs_type(T).
-debug_rs_type(store_two_T(T1, T2)) =
-    string.format("StoreTwo<%s, %s>", [s(T1R), s(T2R)]) :-
-    T1R = debug_rs_type(T1),
-    T2R = debug_rs_type(T2).
-debug_rs_type(unmovable_T) = "Unmovable".
-
-:- func debug_rs_stmt(rs_stmt) = string.
-
-debug_rs_stmt(rs_stmt(Line, Fn, Args)) = Repr :-
-    FnRepr = debug_rs_func(Fn),
+show_rs_stmt(rs_stmt(Line, Fn, Args)) = Repr :-
+    FnRepr = show(Fn),
     ArgStrs = list.map(
         (func(Arg) = string.format("v%d", [i(Arg)])),
         Args),
@@ -498,65 +467,53 @@ debug_rs_stmt(rs_stmt(Line, Fn, Args)) = Repr :-
     Repr = string.format(
         "let v%d = %s(%s);",
         [i(Line), s(FnRepr), s(ArgsRepr)]).
-debug_rs_stmt(rs_stmt_uninit(Line)) =
+show_rs_stmt(rs_stmt_uninit(Line)) =
     string.format("let v%d = ..;", [i(Line)]).
 
-:- func debug_rs_stmts(list(rs_stmt)) = string.
-
-debug_rs_stmts(Stmts) = string.join_list("\n", Reprs) :-
-    RevReprs = list.map(debug_rs_stmt, Stmts),
+show_rs_stmts(Stmts) = string.join_list("\n", Reprs) :-
+    RevReprs = list.map(show_rs_stmt, Stmts),
     Reprs = list.reverse(RevReprs).
 
-:- func debug_rpil_op(rpil_op) = string.
-
-debug_rpil_op(arg(N)) =
+show_rpil_op(arg(N)) =
     string.format("_%d", [i(N)]).
-debug_rpil_op(var(N)) =
+show_rpil_op(var(N)) =
     string.format("v%d", [i(N)]).
-debug_rpil_op(place(Op, N)) =
-    string.format("%s.p%d", [s(debug_rpil_op(Op)), i(N)]).
-debug_rpil_op(place_ext(Op)) =
-    string.format("%s.ext", [s(debug_rpil_op(Op))]).
-debug_rpil_op(variant_place(Op, N1, N2)) =
-    string.format("%s.v%dp%d", [s(debug_rpil_op(Op)), i(N1), i(N2)]).
-debug_rpil_op(deref(Op)) =
-    string.format("(%s)*", [s(debug_rpil_op(Op))]).
+show_rpil_op(place(Op, N)) =
+    string.format("%s.p%d", [s(show_rpil_op(Op)), i(N)]).
+show_rpil_op(place_ext(Op)) =
+    string.format("%s.ext", [s(show_rpil_op(Op))]).
+show_rpil_op(variant_place(Op, N1, N2)) =
+    string.format("%s.v%dp%d", [s(show_rpil_op(Op)), i(N1), i(N2)]).
+show_rpil_op(deref(Op)) =
+    string.format("(%s)*", [s(show_rpil_op(Op))]).
 
-:- func debug_rpil_inst(rpil_inst) = string.
-
-debug_rpil_inst(rpil_bind(Op1, Op2)) =
+show_rpil_inst(rpil_bind(Op1, Op2)) =
     string.format(
         "BIND %s, %s",
-        [s(debug_rpil_op(Op1)), s(debug_rpil_op(Op2))]).
-debug_rpil_inst(rpil_move(Op)) =
-    string.format("MOVE %s", [s(debug_rpil_op(Op))]).
-debug_rpil_inst(rpil_borrow(Op1, Op2)) =
+        [s(show_rpil_op(Op1)), s(show_rpil_op(Op2))]).
+show_rpil_inst(rpil_move(Op)) =
+    string.format("MOVE %s", [s(show_rpil_op(Op))]).
+show_rpil_inst(rpil_borrow(Op1, Op2)) =
     string.format(
         "BORROW %s, %s",
-        [s(debug_rpil_op(Op1)), s(debug_rpil_op(Op2))]).
-debug_rpil_inst(rpil_borrow_mut(Op1, Op2)) =
+        [s(show_rpil_op(Op1)), s(show_rpil_op(Op2))]).
+show_rpil_inst(rpil_borrow_mut(Op1, Op2)) =
     string.format(
         "BORROW-MUT %s, %s",
-        [s(debug_rpil_op(Op1)), s(debug_rpil_op(Op2))]).
-debug_rpil_inst(rpil_deref_move(Op)) =
-    string.format("DEREF-MOVE %s", [s(debug_rpil_op(Op))]).
-debug_rpil_inst(rpil_deref_pin(Op)) =
-    string.format("DEREF-PIN %s", [s(debug_rpil_op(Op))]).
+        [s(show_rpil_op(Op1)), s(show_rpil_op(Op2))]).
+show_rpil_inst(rpil_deref_move(Op)) =
+    string.format("DEREF-MOVE %s", [s(show_rpil_op(Op))]).
+show_rpil_inst(rpil_deref_pin(Op)) =
+    string.format("DEREF-PIN %s", [s(show_rpil_op(Op))]).
 
-:- func debug_rpil_insts(list(rpil_inst)) = string.
+show_rpil_insts(Insts) = string.join_list("\n", Reprs) :-
+    Reprs = list.map(show_rpil_inst, Insts).
 
-debug_rpil_insts(Insts) = string.join_list("\n", Reprs) :-
-    Reprs = list.map(debug_rpil_inst, Insts).
+show_liveness(alive) = "alive".
+show_liveness(dead) = "dead".
 
-:- func debug_liveness(var_liveness) = string.
-
-debug_liveness(alive) = "alive".
-debug_liveness(dead) = "dead".
-
-:- func debug_borrow_kind(borrow_kind) = string.
-
-debug_borrow_kind(shared) = "shared".
-debug_borrow_kind(mutable) = "mutable".
+show_borrow_kind(shared) = "shared".
+show_borrow_kind(mutable) = "mutable".
 
 %---------------------------------------------------------------------------%
 :- end_module pinchecker.
