@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker.m
-% Version: 0.1.1
+% Version: 0.1.2
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides an compilable implementation of PinChecker.
@@ -54,11 +54,17 @@
     --->    shared
     ;       mutable.
 
-    % Defines variable liveness states in Rust
+    % Defines liveness states of a variable in Rust
     %
-:- type var_liveness
+:- type liveness_state
     --->    alive
     ;       dead.
+
+    % Defines pinning states of a place in Rust
+    %
+:- type pinning_state
+    --->    pinned
+    ;       moved.
 
     % Typeclass for Rust functions, types and trait implementations
     %
@@ -129,7 +135,7 @@
 
     % Checks/retrieves the liveness state of a variable
     %
-:- pred ctx_liveness(list(rs_stmt(Func)), int, var_liveness) <= rust_tc(Func, Type, Trait).
+:- pred ctx_liveness(list(rs_stmt(Func)), int, liveness_state) <= rust_tc(Func, Type, Trait).
 :- mode ctx_liveness(in, in, out) is semidet.
 
     % Checks/retrieves borrowing relationships between RPIL operators (get
@@ -137,6 +143,11 @@
     %
 :- pred ctx_borrowing(list(rs_stmt(Func)), rpil_op, rpil_op, borrow_kind) <= rust_tc(Func, Type, Trait).
 :- mode ctx_borrowing(in, in, out, out) is semidet.
+
+    % TODO: doc
+    %
+:- pred ctx_pinning(list(rs_stmt(Func)), rpil_op, pinning_state) <= rust_tc(Func, Type, Trait).
+:- mode ctx_pinning(in, in, out) is semidet.
 
 %---------------------%
 %
@@ -146,6 +157,8 @@
 :- func show_rs_stmt(rs_stmt(Func)) = string <= showable(Func).
 
 :- func show_rs_stmts(list(rs_stmt(Func))) = string <= showable(Func).
+
+:- func show_rpil_op(rpil_op) = string.
 
 %---------------------------------------------------------------------------%
 %---------------------------------------------------------------------------%
@@ -181,7 +194,7 @@
 
 %---------------------%
 %
-% Relevant to the typing/borrowing context
+% Relevant to the typing/borrowing/pinning context
 %
 
     % Applies typing constraints to pairs of variables and types
@@ -201,6 +214,11 @@
 :- pred ctx_borrowing_partial(list(rs_stmt(Func)), list(rpil_inst), rpil_op, rpil_op, borrow_kind) <= rust_tc(Func, Type, Trait).
 :- mode ctx_borrowing_partial(in, in, in, out, out) is semidet.
 
+    % TODO: doc
+    %
+:- pred ctx_pinning_partial(list(rs_stmt(Func)), list(rpil_inst), rpil_op, pinning_state) <= rust_tc(Func, Type, Trait).
+:- mode ctx_pinning_partial(in, in, in, out) is semidet.
+
 %---------------------%
 %
 % Relevant to RPIL operators
@@ -216,6 +234,11 @@
     %
 :- func origin(rpil_op) = int.
 
+    % TODO: doc
+    %
+:- pred contagious_origin(rpil_op, rpil_op).
+:- mode contagious_origin(in, out) is semidet.
+
     % Replaces the origin of an RPIL operator
     %
 :- pred replace_origin(rpil_op, rpil_op, rpil_op, rpil_op).
@@ -226,13 +249,11 @@
 % Display utilities
 %
 
-:- func show_rpil_op(rpil_op) = string.
-
 :- func show_rpil_inst(rpil_inst) = string.
 
 :- func show_rpil_insts(list(rpil_inst)) = string.
 
-:- func show_liveness(var_liveness) = string.
+:- func show_liveness(liveness_state) = string.
 
 :- func show_borrow_kind(borrow_kind) = string.
 
@@ -429,14 +450,66 @@ ctx_borrowing_partial(Stmts, Insts, Lhs, Rhs, Kind) :-
 
 %---------------------%
 
+ctx_pinning(Stmts, Place, Status) :-
+    Stmts = [Stmt | StmtsR],
+    Stmt = rs_stmt(L, Fn, Args),
+    RpilInsts = fn_rpil_reduced(Fn, [L | Args]),
+    ctx_pinning_partial(StmtsR, RpilInsts, Place, Status).
+ctx_pinning(Stmts, Place, Status) :-
+    Stmts = [Stmt | StmtsR],
+    Stmt = rs_stmt_free(_L),
+    ctx_pinning(StmtsR, Place, Status).
+
+ctx_pinning_partial(Stmts, [], Place, Status) :-
+    ctx_pinning(Stmts, Place, Status).
+ctx_pinning_partial(Stmts, Insts, Place, Status) :-
+    Insts = [Inst | InstsR],
+    ( ctx_pinning_partial(Stmts, InstsR, Place, StatusR) ->
+        (
+            StatusR = pinned,
+            ( Inst = rpil_deref_move(BrwConPlace),
+              ctx_borrowing_partial(Stmts, InstsR, BrwConPlace, ConPlace, _Kind),
+              contagious_origin(Place, ConPlace) ->
+                Status = moved
+            ; Inst = rpil_move(ConPlace),
+              contagious_origin(Place, ConPlace) ->
+                Status = moved
+            ;
+                Status = pinned
+            )
+        ;
+            StatusR = moved,
+            Status = moved
+        )
+    ;
+        Inst = rpil_deref_pin(BrwPlace),
+        ctx_borrowing_partial(Stmts, InstsR, BrwPlace, Place, _Kind),
+        Status = pinned
+    ).
+
+%---------------------%
+
 follow_deref(Stmts, Insts, Op0, Op) :-
-    (   Op0 = arg(_),
+    (
+        Op0 = arg(_),
         unexpected($pred, "cannot follow dereferences before RPIL reduction")
-    ;   Op0 = var(_), Op = Op0
-    ;   Op0 = place(_, _), Op = Op0
-    ;   Op0 = place_ext(_), Op = Op0
-    ;   Op0 = variant_place(_, _, _), Op = Op0
-    ;   Op0 = deref(Op1),
+    ;
+        Op0 = var(_),
+        Op = Op0
+    ;
+        Op0 = place(Op1, P),
+        follow_deref(Stmts, Insts, Op1, Op2),
+        Op = place(Op2, P)
+    ;
+        Op0 = place_ext(Op1),
+        follow_deref(Stmts, Insts, Op1, Op2),
+        Op = place_ext(Op2)
+    ;
+        Op0 = variant_place(Op1, V, P),
+        follow_deref(Stmts, Insts, Op1, Op2),
+        Op = variant_place(Op2, V, P)
+    ;
+        Op0 = deref(Op1),
         follow_deref(Stmts, Insts, Op1, Op2),
         ctx_borrowing_partial(Stmts, Insts, Op2, Op, _Kind)
     ).
@@ -448,6 +521,12 @@ origin(place(X0, _)) = origin(X0).
 origin(place_ext(X0)) = origin(X0).
 origin(variant_place(X0, _, _)) = origin(X0).
 origin(deref(X0)) = origin(X0).
+
+contagious_origin(var(X), var(X)).
+contagious_origin(place(X0, _), X) :-
+    contagious_origin(X0, X).
+contagious_origin(variant_place(X0, _, _), X) :-
+    contagious_origin(X0, X).
 
 replace_origin(X0, X, Y, Y0) :-
     ( X = X0 ->

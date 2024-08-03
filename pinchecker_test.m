@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker_test.m
-% Version: 0.1.1
+% Version: 0.1.2
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides tests for `pinchecker' module.
@@ -41,6 +41,13 @@ main(!IO) :-
     run_test(test_lives_even_after_killing_2, "lives_even_after_killing_2", !IO),
     run_test_fails(test_lives_even_after_killing_3_fail, "lives_even_after_killing_3", !IO),
     run_test(test_ctx_borrowing_1, "ctx_borrowing_1", !IO),
+    run_test(test_ctx_borrowing_2, "ctx_borrowing_2", !IO),
+    run_test(test_ctx_pinning_1, "ctx_pinning_1", !IO),
+    run_test(test_ctx_pinning_2, "ctx_pinning_2", !IO),
+    run_test(test_ctx_pinning_3, "ctx_pinning_3", !IO),
+    run_test(test_ctx_pinning_4, "ctx_pinning_4", !IO),
+    run_test(test_ctx_pinning_5, "ctx_pinning_5", !IO),
+    run_test(test_ctx_pinning_6, "ctx_pinning_6", !IO),
     run_test(test_gen_1, "gen_1", !IO).
 
 %---------------------------------------------------------------------------%
@@ -88,7 +95,9 @@ main(!IO) :-
     ;       store_new_F
     ;       store_two_new_F
     ;       unmovable_new_F
-    ;       pin_new_unchecked_F.
+    ;       pin_new_unchecked_F
+    ;       borrow_mut_option_p1_F.
+    % ;       pin_and_move_F.
 
 show_rs_func(move_F) = "move".
 show_rs_func(borrow_F) = "&".
@@ -99,6 +108,8 @@ show_rs_func(store_new_F) = "Store::new".
 show_rs_func(store_two_new_F) = "StoreTwo::new".
 show_rs_func(unmovable_new_F) = "Unmovable::new".
 show_rs_func(pin_new_unchecked_F) = "Pin::new_unchecked".
+show_rs_func(borrow_mut_option_p1_F) = "borrow_mut_option_p1".
+% show_rs_func(pin_and_move_F) = "pin_and_move".
 
 :- type rs_type
     --->    ref_T(rs_type)
@@ -108,6 +119,7 @@ show_rs_func(pin_new_unchecked_F) = "Pin::new_unchecked".
     ;       store_T(rs_type)
     ;       store_two_T(rs_type, rs_type)
     ;       unmovable_T
+    ;       unit_T
     ;       free_type.
 
 fn_typing(move_F, [T], T).
@@ -120,6 +132,8 @@ fn_typing(store_two_new_F, [T1, T2], store_two_T(T1, T2)).
 fn_typing(unmovable_new_F, [], unmovable_T).
 fn_typing(pin_new_unchecked_F, [Ptr], pin_T(Ptr)) :-
     impl_trait(Ptr, deref_Tr(_)).
+fn_typing(borrow_mut_option_p1_F, [mutref_T(option_T(T))], mutref_T(T)).
+% fn_typing(pin_and_move_F, [free_type], unit_T).
 
 fn_rpil(move_F) =
     [ rpil_bind(arg(0), arg(1))
@@ -153,6 +167,11 @@ fn_rpil(pin_new_unchecked_F) =
     [ rpil_bind(arg(0), arg(1))
     , rpil_deref_pin(arg(1))
     ].
+fn_rpil(borrow_mut_option_p1_F) =
+    [ rpil_borrow_mut(arg(0), place(deref(arg(1)),1))
+    ].
+% fn_rpil(pin_and_move_F) =
+%     [ ].
 
 :- type rs_trait
     --->    copy_Tr
@@ -186,6 +205,13 @@ does_not_kill_arguments(Fn) :-
 :- pred test_lives_even_after_killing_2(unit::in) is semidet.
 :- pred test_lives_even_after_killing_3_fail(unit::in) is semidet.
 :- pred test_ctx_borrowing_1(unit::in) is semidet.
+:- pred test_ctx_borrowing_2(unit::in) is semidet.
+:- pred test_ctx_pinning_1(unit::in) is semidet.
+:- pred test_ctx_pinning_2(unit::in) is semidet.
+:- pred test_ctx_pinning_3(unit::in) is semidet.
+:- pred test_ctx_pinning_4(unit::in) is semidet.
+:- pred test_ctx_pinning_5(unit::in) is semidet.
+:- pred test_ctx_pinning_6(unit::in) is semidet.
 :- pred test_gen_1(unit::in) is semidet.
 
 %---------------------%
@@ -247,6 +273,79 @@ test_ctx_borrowing_1(_) :-
         rs_stmt(1, unmovable_new_F, [])
     ],
     ctx_borrowing(Stmts, place(var(4),1), var(1), shared).
+
+test_ctx_borrowing_2(_) :-
+    Stmts = [
+        rs_stmt(4, borrow_mut_option_p1_F, [3]),
+        rs_stmt(3, borrow_mut_F, [2]),
+        rs_stmt(2, option_some_F, [1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_borrowing(Stmts, var(4), place(var(2),1), mutable),
+    ctx_borrowing(Stmts, var(3), var(2), mutable).
+
+test_ctx_pinning_1(_) :-
+    Stmts = [
+        rs_stmt(3, pin_new_unchecked_F, [2]),
+        rs_stmt(2, borrow_mut_F, [1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_pinning(Stmts, var(1), pinned).
+
+test_ctx_pinning_2(_) :-
+    Stmts = [
+        rs_stmt(4, move_F, [1]),
+        rs_stmt(3, pin_new_unchecked_F, [2]),
+        rs_stmt(2, borrow_mut_F, [1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_pinning(Stmts, var(1), moved).
+
+test_ctx_pinning_3(_) :-
+    Stmts = [
+        rs_stmt(5, pin_new_unchecked_F, [4]),
+        rs_stmt(4, borrow_mut_F, [1]),
+        rs_stmt(3, option_some_F, [2]),
+        rs_stmt(2, unmovable_new_F, []),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_pinning(Stmts, var(1), pinned).
+
+test_ctx_pinning_4(_) :-
+    Stmts = [
+        rs_stmt(8, pin_new_unchecked_F, [6]),
+        rs_stmt(7, pin_new_unchecked_F, [4]),
+        rs_stmt(6, borrow_mut_option_p1_F, [5]),
+        rs_stmt(5, borrow_mut_F, [3]),
+        rs_stmt(4, borrow_mut_F, [1]),
+        rs_stmt(3, option_some_F, [2]),
+        rs_stmt(2, unmovable_new_F, []),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_pinning(Stmts, place(var(3),1), pinned),
+    ctx_pinning(Stmts, var(1), pinned).
+
+test_ctx_pinning_5(_) :-
+    Stmts = [
+        rs_stmt(6, pin_new_unchecked_F, [4]),
+        rs_stmt(5, borrow_mut_option_p1_F, [3]),
+        rs_stmt(4, borrow_mut_F, [1]),
+        rs_stmt(3, option_some_F, [2]),
+        rs_stmt(2, unmovable_new_F, []),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_pinning(Stmts, var(10), pinned).
+
+test_ctx_pinning_6(_) :-
+    Stmts = [
+        rs_stmt(6, pin_new_unchecked_F, [4]),
+        rs_stmt(5, borrow_mut_option_p1_F, [3]),
+        rs_stmt(4, borrow_mut_F, [1]),
+        rs_stmt(3, option_some_F, [2]),
+        rs_stmt(2, unmovable_new_F, []),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_pinning(Stmts, var(10), pinned).
 
 test_gen_1(_) :-
     FreeStmts = free_stmts(4),
