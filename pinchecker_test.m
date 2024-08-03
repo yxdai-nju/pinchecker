@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker_test.m
-% Version: 0.1.0
+% Version: 0.1.1
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides tests for `pinchecker' module.
@@ -26,36 +26,24 @@
 :- import_module list.
 :- import_module solutions.
 :- import_module string.
+:- import_module unit.
 
 :- import_module pinchecker.
 
 %---------------------------------------------------------------------------%
 
 main(!IO) :-
-    test_1(!IO),
-    test_2(!IO).
+    run_test(test_ctx_typing_1, "ctx_typing_1", !IO),
+    run_test_fails(test_ctx_typing_2_fail, "ctx_typing_2", !IO),
+    run_test_fails(test_ctx_typing_3_fail, "ctx_typing_3", !IO),
+    run_test(test_ctx_typing_trait_1, "ctx_typing_trait_1", !IO),
+    run_test(test_lives_even_after_killing_1, "lives_even_after_killing_1", !IO),
+    run_test(test_lives_even_after_killing_2, "lives_even_after_killing_2", !IO),
+    run_test_fails(test_lives_even_after_killing_3_fail, "lives_even_after_killing_3", !IO),
+    run_test(test_ctx_borrowing_1, "ctx_borrowing_1", !IO),
+    run_test(test_gen_1, "gen_1", !IO).
 
 %---------------------------------------------------------------------------%
-
-:- type rs_func
-    --->    move_F
-    ;       borrow_F
-    ;       borrow_mut_F
-    ;       store_new_F
-    ;       store_two_new_F
-    ;       unmovable_new_F.
-
-:- type rs_type
-    --->    ref_T(rs_type)
-    ;       mutref_T(rs_type)
-    ;       store_T(rs_type)
-    ;       store_two_T(rs_type, rs_type)
-    ;       unmovable_T.
-
-:- type rs_trait
-    --->    copy_Tr
-    ;       deref_Tr(rs_type)
-    ;       derefmut_Tr(rs_type).
 
 :- instance rust_tc(rs_func, rs_type, rs_trait) where [
     func(fn_rpil_tcm/1) is fn_rpil,
@@ -69,20 +57,20 @@ main(!IO) :-
     func(show/1) is show_rs_func
 ].
 
-:- pred fn_typing(rs_func, list(rs_type), rs_type).
-:- mode fn_typing(in, in, out) is semidet.
-:- mode fn_typing(out, out, in) is multi.
-
 :- func fn_rpil(rs_func) = list(rpil_inst).
 
-:- pred impl_trait(rs_type, rs_trait).
-:- mode impl_trait(in, in) is semidet.
+:- pred does_not_kill_arguments(rs_func).
+:- mode does_not_kill_arguments(in) is semidet.
+
+:- pred fn_typing(rs_func, list(rs_type), rs_type).
+:- mode fn_typing(in, in, out) is nondet.
+:- mode fn_typing(out, out, in) is multi.
 
 :- pred lives_even_after_killing(rs_type).
 :- mode lives_even_after_killing(in) is semidet.
 
-:- pred does_not_kill_arguments(rs_func).
-:- mode does_not_kill_arguments(in) is semidet.
+:- pred impl_trait(rs_type, rs_trait).
+:- mode impl_trait(in, out) is nondet.
 
 :- func show_rs_func(rs_func) = string.
 
@@ -91,12 +79,47 @@ main(!IO) :-
 % Volatile
 %
 
+:- type rs_func
+    --->    move_F
+    ;       borrow_F
+    ;       borrow_mut_F
+    ;       option_some_F
+    ;       option_none_F
+    ;       store_new_F
+    ;       store_two_new_F
+    ;       unmovable_new_F
+    ;       pin_new_unchecked_F.
+
+show_rs_func(move_F) = "move".
+show_rs_func(borrow_F) = "&".
+show_rs_func(borrow_mut_F) = "&mut ".
+show_rs_func(option_some_F) = "Option::Some".
+show_rs_func(option_none_F) = "Option::None".
+show_rs_func(store_new_F) = "Store::new".
+show_rs_func(store_two_new_F) = "StoreTwo::new".
+show_rs_func(unmovable_new_F) = "Unmovable::new".
+show_rs_func(pin_new_unchecked_F) = "Pin::new_unchecked".
+
+:- type rs_type
+    --->    ref_T(rs_type)
+    ;       mutref_T(rs_type)
+    ;       option_T(rs_type)
+    ;       pin_T(rs_type)
+    ;       store_T(rs_type)
+    ;       store_two_T(rs_type, rs_type)
+    ;       unmovable_T
+    ;       free_type.
+
 fn_typing(move_F, [T], T).
 fn_typing(borrow_F, [T], ref_T(T)).
 fn_typing(borrow_mut_F, [T], mutref_T(T)).
+fn_typing(option_some_F, [T], option_T(T)).
+fn_typing(option_none_F, [], option_T(free_type)).
 fn_typing(store_new_F, [T], store_T(T)).
 fn_typing(store_two_new_F, [T1, T2], store_two_T(T1, T2)).
 fn_typing(unmovable_new_F, [], unmovable_T).
+fn_typing(pin_new_unchecked_F, [Ptr], pin_T(Ptr)) :-
+    impl_trait(Ptr, deref_Tr(_)).
 
 fn_rpil(move_F) =
     [ rpil_bind(arg(0), arg(1))
@@ -108,6 +131,12 @@ fn_rpil(borrow_F) =
 fn_rpil(borrow_mut_F) =
     [ rpil_borrow_mut(arg(0), arg(1))
     ].
+fn_rpil(option_some_F) =
+    [ rpil_bind(place(arg(0),1), arg(1))
+    , rpil_move(arg(1))
+    ].
+fn_rpil(option_none_F) =
+    [ ].
 fn_rpil(store_new_F) =
     [ rpil_bind(place(arg(0),1), arg(1))
     , rpil_move(arg(1))
@@ -120,8 +149,19 @@ fn_rpil(store_two_new_F) =
     ].
 fn_rpil(unmovable_new_F) =
     [ ].
+fn_rpil(pin_new_unchecked_F) =
+    [ rpil_bind(arg(0), arg(1))
+    , rpil_deref_pin(arg(1))
+    ].
+
+:- type rs_trait
+    --->    copy_Tr
+    ;       deref_Tr(rs_type)
+    ;       derefmut_Tr(rs_type).
 
 impl_trait(ref_T(_), copy_Tr).
+impl_trait(option_T(T), copy_Tr) :-
+    impl_trait(T, copy_Tr).
 impl_trait(ref_T(T), deref_Tr(T)).
 impl_trait(mutref_T(T), derefmut_Tr(T)).
 
@@ -136,68 +176,108 @@ does_not_kill_arguments(Fn) :-
         Fn = borrow_mut_F
     ).
 
-show_rs_func(move_F) = "move".
-show_rs_func(borrow_F) = "&".
-show_rs_func(borrow_mut_F) = "&mut ".
-show_rs_func(store_new_F) = "Store::new".
-show_rs_func(store_two_new_F) = "StoreTwo::new".
-show_rs_func(unmovable_new_F) = "Unmovable::new".
+%---------------------------------------------------------------------------%
+
+:- pred test_ctx_typing_1(unit::in) is semidet.
+:- pred test_ctx_typing_2_fail(unit::in) is semidet.
+:- pred test_ctx_typing_3_fail(unit::in) is semidet.
+:- pred test_ctx_typing_trait_1(unit::in) is semidet.
+:- pred test_lives_even_after_killing_1(unit::in) is semidet.
+:- pred test_lives_even_after_killing_2(unit::in) is semidet.
+:- pred test_lives_even_after_killing_3_fail(unit::in) is semidet.
+:- pred test_ctx_borrowing_1(unit::in) is semidet.
+:- pred test_gen_1(unit::in) is semidet.
+
+%---------------------%
+
+:- pred run_test(pred(unit), string, io, io).
+:- mode run_test(pred(in) is semidet, in, di, uo) is det.
+
+:- pred run_test_fails(pred(unit), string, io, io).
+:- mode run_test_fails(pred(in) is semidet, in, di, uo) is det.
 
 %---------------------------------------------------------------------------%
 
-:- pred test_1(io::di, io::uo) is det.
+test_ctx_typing_1(_) :-
+    Stmts = [
+        rs_stmt(2, store_new_F, [1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_typing(Stmts, 2, store_T(unmovable_T)).
 
-:- pred test_2(io::di, io::uo) is det.
+test_ctx_typing_2_fail(_) :-
+    Stmts = [
+        rs_stmt(2, store_two_new_F, [1, 1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_typing(Stmts, 2, _).
 
-:- func show_rs_type(rs_type) = string.
+test_ctx_typing_3_fail(_) :-
+    Stmts = [
+        rs_stmt(3, store_two_new_F, [1, 2]),
+        rs_stmt(2, borrow_F, [1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_typing(Stmts, 3, _).
 
-%---------------------------------------------------------------------------%
+test_ctx_typing_trait_1(_) :-
+    Stmts = [
+        rs_stmt(3, pin_new_unchecked_F, [2]),
+        rs_stmt(2, borrow_F, [1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_typing(Stmts, 3, pin_T(ref_T(unmovable_T))),
+    ctx_typing(Stmts, 2, ref_T(unmovable_T)),
+    ctx_typing(Stmts, 1, unmovable_T).
 
-test_1(!IO) :-
-    TestStmts = [
+test_lives_even_after_killing_1(_) :-
+    lives_even_after_killing(mutref_T(unmovable_T)).
+
+test_lives_even_after_killing_2(_) :-
+    lives_even_after_killing(option_T(ref_T(unmovable_T))).
+
+test_lives_even_after_killing_3_fail(_) :-
+    lives_even_after_killing(option_T(mutref_T(unmovable_T))).
+
+test_ctx_borrowing_1(_) :-
+    Stmts = [
         rs_stmt(4, move_F, [3]),
         rs_stmt(3, store_new_F, [2]),
         rs_stmt(2, borrow_F, [1]),
         rs_stmt(1, unmovable_new_F, [])
     ],
-    io.print_line(show_rs_stmts(TestStmts), !IO),
-    ( ctx_borrowing(TestStmts, place(var(4),1), var(1), shared) ->
-        io.print("succeeds\n", !IO)
-    ;
-        io.print("failed\n", !IO)
-    ).
+    ctx_borrowing(Stmts, place(var(4),1), var(1), shared).
 
-test_2(!IO):-
-    StmtsUninit = uninit_stmts(4),
+test_gen_1(_) :-
+    FreeStmts = free_stmts(4),
     solutions(
         (pred(Stmts::out) is nondet :-
             Type = store_T(ref_T(unmovable_T)),
-            ctx_typing_gen(StmtsUninit, Stmts, 4, Type),
+            ctx_typing_gen(FreeStmts, Stmts, 4, Type),
             ctx_borrowing(Stmts, place(var(4),1), var(1), shared)
         ),
         Solutions
     ),
-    Reprs = list.map(show_rs_stmts, Solutions),
-    Sep = "\n--------------------------------\n",
-    Repr = string.join_list(Sep, Reprs),
-    io.format("%s\n", [s(Repr)], !IO).
+    list.member([rs_stmt(4, move_F, [3]), rs_stmt(3, store_new_F, [2]), rs_stmt(2, borrow_F, [1]), rs_stmt(1, unmovable_new_F, [])], Solutions),
+    list.member([rs_stmt(4, store_new_F, [2]), rs_stmt_free(3), rs_stmt(2, borrow_F, [1]), rs_stmt(1, unmovable_new_F, [])], Solutions),
+    list.member([rs_stmt(4, store_new_F, [3]), rs_stmt(3, move_F, [2]), rs_stmt(2, borrow_F, [1]), rs_stmt(1, unmovable_new_F, [])], Solutions),
+    list.member([rs_stmt(4, store_new_F, [3]), rs_stmt(3, borrow_F, [1]), rs_stmt_free(2), rs_stmt(1, unmovable_new_F, [])], Solutions).
 
 %---------------------%
 
-show_rs_type(ref_T(T)) =
-    string.format("&%s", [s(TR)]) :-
-    TR = show_rs_type(T).
-show_rs_type(mutref_T(T)) =
-    string.format("&mut %s", [s(TR)]) :-
-    TR = show_rs_type(T).
-show_rs_type(store_T(T)) =
-    string.format("Store<%s>", [s(TR)]) :-
-    TR = show_rs_type(T).
-show_rs_type(store_two_T(T1, T2)) =
-    string.format("StoreTwo<%s, %s>", [s(T1R), s(T2R)]) :-
-    T1R = show_rs_type(T1),
-    T2R = show_rs_type(T2).
-show_rs_type(unmovable_T) = "Unmovable".
+run_test(Pred, Name, !IO) :-
+    ( call(Pred, unit) ->
+        io.format("%%\ttest %s: succeeded\n", [s(Name)], !IO)
+    ;
+        io.format("!\ttest %s: failed\n", [s(Name)], !IO)
+    ).
+
+run_test_fails(Pred, Name, !IO) :-
+    ( call(Pred, unit) ->
+        io.format("!\ttest %s: failed\n", [s(Name)], !IO)
+    ;
+        io.format("%%\ttest %s: succeeded\n", [s(Name)], !IO)
+    ).
 
 %---------------------------------------------------------------------------%
 :- end_module pinchecker_test.

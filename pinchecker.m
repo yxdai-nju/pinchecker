@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker.m
-% Version: 0.1.0
+% Version: 0.1.1
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides an compilable implementation of PinChecker.
@@ -24,7 +24,7 @@
                 Func,       % function called
                 list(int)   % arguments (variable indices)
             )
-    ;       rs_stmt_uninit(
+    ;       rs_stmt_free(
                 int         % line number
             ).
 
@@ -63,7 +63,7 @@
     % Typeclass for Rust functions, types and trait implementations
     %
 :- typeclass rust_tc(Func, Type, Trait) <= (
-    showable(Func),
+    showable(Func), % required in `show_rs_stmt'
     (Func -> Type),
     (Type -> Func, Trait)
 ) where [
@@ -78,11 +78,11 @@
     mode does_not_kill_arguments_tcm(in) is semidet,
 
         % Determines function return type by providing argument types, or
-        % list all possible "function - argument type" pairs, by providing
+        % list all possible "function - argument types" pairs, by providing
         % the return type
         %
     pred fn_typing_tcm(Func, list(Type), Type),
-    mode fn_typing_tcm(in, in, out) is semidet,
+    mode fn_typing_tcm(in, in, out) is nondet,
     mode fn_typing_tcm(out, out, in) is multi,
 
         % Checks if a type lives even after being killed (e.g., shared
@@ -94,16 +94,23 @@
         % Checks if a type implements a trait
         %
     pred impl_trait_tcm(Type, Trait),
-    mode impl_trait_tcm(in, in) is semidet
+    mode impl_trait_tcm(in, out) is nondet
 ].
 
+    % Typeclass for string representations
+    %
 :- typeclass showable(T) where [
     func show(T) = string
 ].
 
-    % Creates a list of uninitialized statements
+%---------------------%
+%
+% Core generation logic
+%
+
+    % Creates a list of free statements
     %
-:- func uninit_stmts(int) = list(rs_stmt(Func)) <= rust_tc(Func, Type, Trait).
+:- func free_stmts(int) = list(rs_stmt(Func)) <= rust_tc(Func, Type, Trait).
 
     % Generates statements by applying typing constraints
     %
@@ -111,11 +118,14 @@
 :- mode ctx_typing_gen(in, out, in, in) is nondet.
 
 %---------------------%
+%
+% Typing/liveness/borrowing context
+%
 
     % Checks/retrieves the type of a variable
     %
 :- pred ctx_typing(list(rs_stmt(Func)), int, Type) <= rust_tc(Func, Type, Trait).
-:- mode ctx_typing(in, in, out) is semidet.
+:- mode ctx_typing(in, in, out) is nondet.
 
     % Checks/retrieves the liveness state of a variable
     %
@@ -129,6 +139,9 @@
 :- mode ctx_borrowing(in, in, out, out) is semidet.
 
 %---------------------%
+%
+% Display utilities
+%
 
 :- func show_rs_stmt(rs_stmt(Func)) = string <= showable(Func).
 
@@ -209,6 +222,9 @@
 :- mode replace_origin(in, in, in, out) is semidet.
 
 %---------------------%
+%
+% Display utilities
+%
 
 :- func show_rpil_op(rpil_op) = string.
 
@@ -222,10 +238,10 @@
 
 %---------------------------------------------------------------------------%
 
-uninit_stmts(L) = Stmts :-
+free_stmts(L) = Stmts :-
     ( L > 0 ->
-        Stmt = rs_stmt_uninit(L),
-        Stmts = [Stmt | uninit_stmts(L - 1)]
+        Stmt = rs_stmt_free(L),
+        Stmts = [Stmt | free_stmts(L - 1)]
     ; L = 0 ->
         Stmts = []
     ;
@@ -234,7 +250,7 @@ uninit_stmts(L) = Stmts :-
 
 ctx_typing_gen(Stmts_in, Stmts_out, Var, Type) :-
     Stmts_in = [Stmt_in | StmtsR_in],
-    Stmt_in = rs_stmt_uninit(L),
+    Stmt_in = rs_stmt_free(L),
     ( Var = L ->
         fn_typing_tcm(Fn, ArgTypes, Type),
         list.map(ctx_typing_findvar(StmtsR_in), ArgTypes, Args),
@@ -276,7 +292,7 @@ ctx_typing_findvar(Stmts, Type, Var) :-
             fn_typing_tcm(Fn, ArgTypes, Type),
             list.map(ctx_typing(StmtsR), Args, ArgTypes)
         ;
-            Stmt = rs_stmt_uninit(L)
+            Stmt = rs_stmt_free(L)
         ),
         Var = L
     ;
@@ -346,7 +362,7 @@ ctx_typing([Stmt | StmtsR], Var, Type) :-
         ctx_typing(StmtsR, Var, Type)
     ).
 ctx_typing([Stmt | StmtsR], Var, Type) :-
-    Stmt = rs_stmt_uninit(L),
+    Stmt = rs_stmt_free(L),
     ( Var = L ->
         false
     ;
@@ -356,7 +372,7 @@ ctx_typing([Stmt | StmtsR], Var, Type) :-
 %---------------------%
 
 ctx_liveness([Stmt | _], _, Liveness) :-
-    Stmt = rs_stmt_uninit(_L),
+    Stmt = rs_stmt_free(_L),
     Liveness = alive.
 ctx_liveness([Stmt | StmtsR], Var, Liveness) :-
     Stmt = rs_stmt(L, Fn, Args),
@@ -387,7 +403,7 @@ ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
     ctx_liveness(Stmts, origin(Rhs), alive).
 ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
     Stmts = [Stmt | StmtsR],
-    Stmt = rs_stmt_uninit(_L),
+    Stmt = rs_stmt_free(_L),
     ctx_borrowing(StmtsR, Lhs, Rhs, Kind).
 
 ctx_borrowing_partial(Stmts, [], Lhs, Rhs, Kind) :-
@@ -456,7 +472,7 @@ replace_origin(X0, X, Y, Y0) :-
         )
     ).
 
-%---------------------------------------------------------------------------%
+%---------------------%
 
 show_rs_stmt(rs_stmt(Line, Fn, Args)) = Repr :-
     FnRepr = show(Fn),
@@ -467,7 +483,7 @@ show_rs_stmt(rs_stmt(Line, Fn, Args)) = Repr :-
     Repr = string.format(
         "let v%d = %s(%s);",
         [i(Line), s(FnRepr), s(ArgsRepr)]).
-show_rs_stmt(rs_stmt_uninit(Line)) =
+show_rs_stmt(rs_stmt_free(Line)) =
     string.format("let v%d = ..;", [i(Line)]).
 
 show_rs_stmts(Stmts) = string.join_list("\n", Reprs) :-
