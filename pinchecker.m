@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker.m
-% Version: 0.1.2
+% Version: 0.1.3
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides an compilable implementation of PinChecker.
@@ -91,6 +91,12 @@
     mode fn_typing_tcm(in, in, out) is nondet,
     mode fn_typing_tcm(out, out, in) is multi,
 
+        % Checks if two types are compatible (the first type can be assigned
+        % to the second type)
+        %
+    pred type_compatible_tcm(Type, Type),
+    mode type_compatible_tcm(in, out) is multi,
+
         % Checks if a type lives even after being killed (e.g., shared
         % references, types that implement `Copy' trait)
         %
@@ -138,13 +144,12 @@
 :- pred ctx_liveness(list(rs_stmt(Func)), int, liveness_state) <= rust_tc(Func, Type, Trait).
 :- mode ctx_liveness(in, in, out) is semidet.
 
-    % Checks/retrieves borrowing relationships between RPIL operators (get
-    % RHS and borrow kind, by providing LHS)
+    % Checks/retrieves the borrowing relationship between two places
     %
 :- pred ctx_borrowing(list(rs_stmt(Func)), rpil_op, rpil_op, borrow_kind) <= rust_tc(Func, Type, Trait).
 :- mode ctx_borrowing(in, in, out, out) is semidet.
 
-    % TODO: doc
+    % Checks/retrieves the pinning state of a place
     %
 :- pred ctx_pinning(list(rs_stmt(Func)), rpil_op, pinning_state) <= rust_tc(Func, Type, Trait).
 :- mode ctx_pinning(in, in, out) is semidet.
@@ -207,14 +212,14 @@
 :- pred ctx_typing_findvar(list(rs_stmt(Func)), Type, int) <= rust_tc(Func, Type, Trait).
 :- mode ctx_typing_findvar(in, in, out) is nondet.
 
-    % Checks borrowing relationships between RPIL places, by providing not
-    % only statements, but also partially interpreted RPIL instructions of
-    % the next statement
+    % Checks/retrieves the borrowing relationship between two places, given
+    % also partially interpreted RPIL instructions of the next statement
     %
 :- pred ctx_borrowing_partial(list(rs_stmt(Func)), list(rpil_inst), rpil_op, rpil_op, borrow_kind) <= rust_tc(Func, Type, Trait).
 :- mode ctx_borrowing_partial(in, in, in, out, out) is semidet.
 
-    % TODO: doc
+    % Checks/retrieves the borrowing relationship between two places, given
+    % also partially interpreted RPIL instructions of the next statement
     %
 :- pred ctx_pinning_partial(list(rs_stmt(Func)), list(rpil_inst), rpil_op, pinning_state) <= rust_tc(Func, Type, Trait).
 :- mode ctx_pinning_partial(in, in, in, out) is semidet.
@@ -234,15 +239,16 @@
     %
 :- func origin(rpil_op) = int.
 
-    % TODO: doc
-    %
-:- pred contagious_origin(rpil_op, rpil_op).
-:- mode contagious_origin(in, out) is semidet.
-
     % Replaces the origin of an RPIL operator
     %
 :- pred replace_origin(rpil_op, rpil_op, rpil_op, rpil_op).
 :- mode replace_origin(in, in, in, out) is semidet.
+
+    % Checks if two places are contagious (moving the second place also leads
+    % to the first place being moved)
+    %
+:- pred place_contagious(rpil_op, rpil_op).
+:- mode place_contagious(in, out) is semidet.
 
 %---------------------%
 %
@@ -273,7 +279,8 @@ ctx_typing_gen(Stmts_in, Stmts_out, Var, Type) :-
     Stmts_in = [Stmt_in | StmtsR_in],
     Stmt_in = rs_stmt_free(L),
     ( Var = L ->
-        fn_typing_tcm(Fn, ArgTypes, Type),
+        RetType = Type, % type_compatible_tcm(RetType, Type),
+        fn_typing_tcm(Fn, ArgTypes, RetType),
         list.map(ctx_typing_findvar(StmtsR_in), ArgTypes, Args),
         Stmt_out = rs_stmt(L, Fn, Args),
         ctx_typing_gen_chain(StmtsR_in, StmtsR_out, Args, ArgTypes),
@@ -310,7 +317,8 @@ ctx_typing_findvar(Stmts, Type, Var) :-
     (
         (
             Stmt = rs_stmt(L, Fn, Args),
-            fn_typing_tcm(Fn, ArgTypes, Type),
+            RetType = Type, % type_compatible_tcm(RetType, Type),
+            fn_typing_tcm(Fn, ArgTypes, RetType),
             list.map(ctx_typing(StmtsR), Args, ArgTypes)
         ;
             Stmt = rs_stmt_free(L)
@@ -378,7 +386,8 @@ ctx_typing([Stmt | StmtsR], Var, Type) :-
     Stmt = rs_stmt(L, Fn, Args),
     ( Var = L ->
         list.map(ctx_typing(StmtsR), Args, ArgTypes),
-        fn_typing_tcm(Fn, ArgTypes, Type)
+        fn_typing_tcm(Fn, ArgTypes, RetType),
+        type_compatible_tcm(RetType, Type)
     ;
         ctx_typing(StmtsR, Var, Type)
     ).
@@ -469,10 +478,10 @@ ctx_pinning_partial(Stmts, Insts, Place, Status) :-
             StatusR = pinned,
             ( Inst = rpil_deref_move(BrwConPlace),
               ctx_borrowing_partial(Stmts, InstsR, BrwConPlace, ConPlace, _Kind),
-              contagious_origin(Place, ConPlace) ->
+              place_contagious(Place, ConPlace) ->
                 Status = moved
             ; Inst = rpil_move(ConPlace),
-              contagious_origin(Place, ConPlace) ->
+              place_contagious(Place, ConPlace) ->
                 Status = moved
             ;
                 Status = pinned
@@ -522,12 +531,6 @@ origin(place_ext(X0)) = origin(X0).
 origin(variant_place(X0, _, _)) = origin(X0).
 origin(deref(X0)) = origin(X0).
 
-contagious_origin(var(X), var(X)).
-contagious_origin(place(X0, _), X) :-
-    contagious_origin(X0, X).
-contagious_origin(variant_place(X0, _, _), X) :-
-    contagious_origin(X0, X).
-
 replace_origin(X0, X, Y, Y0) :-
     ( X = X0 ->
         Y0 = Y
@@ -550,6 +553,12 @@ replace_origin(X0, X, Y, Y0) :-
             Y0 = deref(Y1)
         )
     ).
+
+place_contagious(var(X), var(X)).
+place_contagious(place(X0, _), X) :-
+    place_contagious(X0, X).
+place_contagious(variant_place(X0, _, _), X) :-
+    place_contagious(X0, X).
 
 %---------------------%
 
