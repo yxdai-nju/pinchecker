@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker.m
-% Version: 0.1.3
+% Version: 0.1.4
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides an compilable implementation of PinChecker.
@@ -13,6 +13,7 @@
 :- interface.
 
 :- import_module list.
+:- import_module set.
 
 %---------------------------------------------------------------------------%
 
@@ -144,6 +145,10 @@
 :- pred ctx_liveness(list(rs_stmt(Func)), int, liveness_state) <= rust_tc(Func, Type, Trait).
 :- mode ctx_liveness(in, in, out) is semidet.
 
+    % TODO: doc
+    %
+:- func ctx_places(list(rs_stmt(Func)), int) = set(rpil_op) <= rust_tc(Func, Type, Trait).
+
     % Checks/retrieves the borrowing relationship between two places
     %
 :- pred ctx_borrowing(list(rs_stmt(Func)), rpil_op, rpil_op, borrow_kind) <= rust_tc(Func, Type, Trait).
@@ -178,7 +183,7 @@
 
 %---------------------%
 %
-% Performs RPIL reduction
+% RPIL reduction and RPIL place enumeration
 %
 
     % Reduces the RPIL instructions for a given function
@@ -196,6 +201,10 @@
     % Reduces a term in an RPIL instruction
     %
 :- func rpil_term_reduction(list(int), rpil_op) = rpil_op.
+
+    % TODO: doc
+    %
+:- func rpil_inst_places(rpil_inst) = list(rpil_op).
 
 %---------------------%
 %
@@ -380,6 +389,13 @@ rpil_term_reduction(Ops, deref(Term)) =
     deref(TermR) :-
     TermR = rpil_term_reduction(Ops, Term).
 
+rpil_inst_places(rpil_bind(Op1, Op2)) = [Op1, Op2].
+rpil_inst_places(rpil_move(Op)) = [Op].
+rpil_inst_places(rpil_borrow(Op1, Op2)) = [Op1, Op2].
+rpil_inst_places(rpil_borrow_mut(Op1, Op2)) = [Op1, Op2].
+rpil_inst_places(rpil_deref_move(Op)) = [Op].
+rpil_inst_places(rpil_deref_pin(Op)) = [Op].
+
 %---------------------%
 
 ctx_typing([Stmt | StmtsR], Var, Type) :-
@@ -420,6 +436,39 @@ ctx_liveness([Stmt | StmtsR], Var, Liveness) :-
         )
     ;
         ctx_liveness(StmtsR, Var, Liveness)
+    ).
+
+%---------------------%
+
+ctx_places([], _) = list_to_set([]).
+ctx_places([Stmt | StmtsR], Var) = Places :-
+    Stmt = rs_stmt_free(L),
+    ( Var = L ->
+        Places = list_to_set([])
+    ;
+        Places = ctx_places(StmtsR, Var)
+    ).
+ctx_places([Stmt | StmtsR], Var) = Places :-
+    Stmt = rs_stmt(L, Fn, Args),
+    RpilInsts = fn_rpil_reduced(Fn, [L | Args]),
+    Places0 = ctx_places(StmtsR, Var),
+    ( Var = L ->
+        Places1 = set.insert(Places0, var(Var))
+    ;
+        Places1 = Places0
+    ),
+    Places = list.foldl(
+        (func(PlaceList, Acc) = set.union(VarPlaces, Acc) :-
+            VarPlaceList = list.filter(
+                (pred(RpilPlace::in) is semidet :- 
+                    origin(RpilPlace) = Var
+                ),
+                PlaceList
+            ),
+            VarPlaces = list_to_set(VarPlaceList)
+        ),
+        list.map(rpil_inst_places, RpilInsts),
+        Places1
     ).
 
 %---------------------%

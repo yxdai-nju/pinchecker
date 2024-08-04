@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker_test.m
-% Version: 0.1.3
+% Version: 0.1.4
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides tests for `pinchecker' module.
@@ -24,6 +24,7 @@
 :- implementation.
 
 :- import_module list.
+:- import_module set.
 :- import_module solutions.
 :- import_module string.
 :- import_module unit.
@@ -41,8 +42,13 @@ main(!IO) :-
     run_test(test_lives_even_after_killing_1, "lives_even_after_killing_1", !IO),
     run_test(test_lives_even_after_killing_2, "lives_even_after_killing_2", !IO),
     run_test_fails(test_lives_even_after_killing_3_fail, "lives_even_after_killing_3", !IO),
+    run_test(test_ctx_liveness_1, "ctx_liveness_1", !IO),
+    run_test(test_ctx_places_1, "ctx_places_1", !IO),
     run_test(test_ctx_borrowing_1, "ctx_borrowing_1", !IO),
     run_test(test_ctx_borrowing_2, "ctx_borrowing_2", !IO),
+    run_test_fails(test_ctx_borrowing_liveness_1_fail, "ctx_borrowing_liveness_1", !IO),
+    run_test(test_ctx_borrowing_liveness_2, "ctx_borrowing_liveness_2", !IO),
+    run_test_fails(test_ctx_borrowing_liveness_3_fail, "ctx_borrowing_liveness_3", !IO),
     run_test(test_ctx_pinning_1, "ctx_pinning_1", !IO),
     run_test(test_ctx_pinning_2, "ctx_pinning_2", !IO),
     run_test(test_ctx_pinning_3, "ctx_pinning_3", !IO),
@@ -256,8 +262,13 @@ does_not_kill_arguments(Fn) :-
 :- pred test_lives_even_after_killing_1(unit::in) is semidet.
 :- pred test_lives_even_after_killing_2(unit::in) is semidet.
 :- pred test_lives_even_after_killing_3_fail(unit::in) is semidet.
+:- pred test_ctx_liveness_1(unit::in) is semidet.
+:- pred test_ctx_places_1(unit::in) is semidet.
 :- pred test_ctx_borrowing_1(unit::in) is semidet.
 :- pred test_ctx_borrowing_2(unit::in) is semidet.
+:- pred test_ctx_borrowing_liveness_1_fail(unit::in) is semidet.
+:- pred test_ctx_borrowing_liveness_2(unit::in) is semidet.
+:- pred test_ctx_borrowing_liveness_3_fail(unit::in) is semidet.
 :- pred test_ctx_pinning_1(unit::in) is semidet.
 :- pred test_ctx_pinning_2(unit::in) is semidet.
 :- pred test_ctx_pinning_3(unit::in) is semidet.
@@ -283,6 +294,7 @@ test_ctx_typing_1(_) :-
     ],
     ctx_typing(Stmts, 2, store_T(unmovable_T)).
 
+% TODO: fix bugs to make this case pass
 test_ctx_typing_2_fail(_) :-
     Stmts = [
         rs_stmt(2, store_two_new_F, [1, 1]),
@@ -290,6 +302,7 @@ test_ctx_typing_2_fail(_) :-
     ],
     ctx_typing(Stmts, 2, _Type).
 
+% TODO: fix bugs to make this case pass
 test_ctx_typing_3_fail(_) :-
     Stmts = [
         rs_stmt(3, store_two_new_F, [1, 2]),
@@ -325,6 +338,24 @@ test_lives_even_after_killing_2(_) :-
 test_lives_even_after_killing_3_fail(_) :-
     lives_even_after_killing(option_T(mutref_T(unmovable_T))).
 
+% TODO: fix bugs to make this case pass
+test_ctx_liveness_1(_) :-
+    Stmts = [
+        rs_stmt(3, move_F, [1]),
+        rs_stmt(2, borrow_F, [1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_liveness(Stmts, 2, dead).
+
+test_ctx_places_1(_) :-
+    Stmts = [
+        rs_stmt(2, pin_macro_F, [1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    Places = ctx_places(Stmts, 2),
+    ExpectedPlaces = list_to_set([var(2), place_ext(var(2))]),
+    set.equal(ExpectedPlaces, Places).
+
 test_ctx_borrowing_1(_) :-
     Stmts = [
         rs_stmt(4, move_F, [3]),
@@ -343,6 +374,36 @@ test_ctx_borrowing_2(_) :-
     ],
     ctx_borrowing(Stmts, var(4), place(var(2),1), mutable),
     ctx_borrowing(Stmts, var(3), var(2), mutable).
+
+test_ctx_borrowing_liveness_1_fail(_) :-
+    Stmts = [
+        rs_stmt(3, move_F, [1]),
+        rs_stmt(2, borrow_F, [1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_borrowing(Stmts, var(2), var(1), shared).
+
+test_ctx_borrowing_liveness_2(_) :-
+    Stmts = [
+        rs_stmt(5, store_new_F, [4]),
+        rs_stmt(4, borrow_mut_option_p1_F, [3]),
+        rs_stmt(3, borrow_mut_F, [2]),
+        rs_stmt(2, option_some_F, [1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_borrowing(Stmts, place(var(5),1), place(var(2),1), mutable),
+    ctx_borrowing(Stmts, var(4), place(var(2),1), mutable).
+
+test_ctx_borrowing_liveness_3_fail(_) :-
+    Stmts = [
+        rs_stmt(6, move_F, [2]),
+        rs_stmt(5, store_new_F, [4]),
+        rs_stmt(4, borrow_mut_option_p1_F, [3]),
+        rs_stmt(3, borrow_mut_F, [2]),
+        rs_stmt(2, option_some_F, [1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_borrowing(Stmts, place(var(5),1), place(var(2),1), mutable).
 
 test_ctx_pinning_1(_) :-
     Stmts = [
@@ -411,10 +472,13 @@ test_gen_1(_) :-
         ),
         Solutions
     ),
-    list.member([rs_stmt(4, move_F, [3]), rs_stmt(3, store_new_F, [2]), rs_stmt(2, borrow_F, [1]), rs_stmt(1, unmovable_new_F, [])], Solutions),
-    list.member([rs_stmt(4, store_new_F, [2]), rs_stmt_free(3), rs_stmt(2, borrow_F, [1]), rs_stmt(1, unmovable_new_F, [])], Solutions),
-    list.member([rs_stmt(4, store_new_F, [3]), rs_stmt(3, move_F, [2]), rs_stmt(2, borrow_F, [1]), rs_stmt(1, unmovable_new_F, [])], Solutions),
-    list.member([rs_stmt(4, store_new_F, [3]), rs_stmt(3, borrow_F, [1]), rs_stmt_free(2), rs_stmt(1, unmovable_new_F, [])], Solutions).
+    ExpectedSolutions = [
+        [rs_stmt(4, move_F, [3]), rs_stmt(3, store_new_F, [2]), rs_stmt(2, borrow_F, [1]), rs_stmt(1, unmovable_new_F, [])],
+        [rs_stmt(4, store_new_F, [2]), rs_stmt_free(3), rs_stmt(2, borrow_F, [1]), rs_stmt(1, unmovable_new_F, [])],
+        [rs_stmt(4, store_new_F, [3]), rs_stmt(3, move_F, [2]), rs_stmt(2, borrow_F, [1]), rs_stmt(1, unmovable_new_F, [])],
+        [rs_stmt(4, store_new_F, [3]), rs_stmt(3, borrow_F, [1]), rs_stmt_free(2), rs_stmt(1, unmovable_new_F, [])]
+    ],
+    set.equal(list_to_set(Solutions), list_to_set(ExpectedSolutions)).
 
 %---------------------%
 
