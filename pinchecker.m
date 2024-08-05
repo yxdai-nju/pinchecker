@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker.m
-% Version: 0.1.5
+% Version: 0.1.6
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides an compilable implementation of PinChecker.
@@ -145,7 +145,7 @@
 :- pred ctx_liveness(list(rs_stmt(Func)), int, liveness_state) <= rust_tc(Func, Type, Trait).
 :- mode ctx_liveness(in, in, out) is semidet.
 
-    % TODO: doc
+    % Retrieves the set of RPIL places associated with a given variable
     %
 :- func ctx_places(list(rs_stmt(Func)), int) = set(rpil_op) <= rust_tc(Func, Type, Trait).
 
@@ -202,7 +202,7 @@
     %
 :- func rpil_term_reduction(list(int), rpil_op) = rpil_op.
 
-    % TODO: doc
+    % Extracts the RPIL places (operators) used in a given RPIL instruction
     %
 :- func rpil_inst_places(rpil_inst) = list(rpil_op).
 
@@ -221,10 +221,32 @@
 :- pred ctx_typing_findvar(list(rs_stmt(Func)), Type, int) <= rust_tc(Func, Type, Trait).
 :- mode ctx_typing_findvar(in, in, out) is nondet.
 
-    % TODO: doc
+    % Maps alive variable types for a function's arguments
+    % 
+    % For each argument:
+    % 1. It checks if the variable is alive when other argument variables are
+    %    consumed by the function
+    % 2. If alive, it retrieves the type of the argument variable
     %
-:- pred vars_borrowed_before_are_still_alive(list(rs_stmt(Func)), int) <= rust_tc(Func, Type, Trait).
-:- mode vars_borrowed_before_are_still_alive(in, in) is semidet.
+:- pred map_alive_var_types(list(rs_stmt(Func)), Func, list(int), list(Type)) <= rust_tc(Func, Type, Trait).
+:- mode map_alive_var_types(in, in, in, out) is nondet.
+
+    % Applies a predicate to each element of a list along with the list
+    % remainder with the element excluded
+    %
+:- pred map_with_list_remainder(pred(L, list(L), A), list(L), list(A)).
+:- mode map_with_list_remainder(in(pred(in, in, out) is nondet), in, out) is nondet.
+
+    % Checks/retrieves the liveness state of a variable, given also a list of
+    % partially processed function arguments of the next statement
+    %
+:- pred ctx_liveness_partial(list(rs_stmt(Func)), Func, list(int), int, liveness_state) <= rust_tc(Func, Type, Trait).
+:- mode ctx_liveness_partial(in, in, in, in, out) is semidet.
+
+    % Checks if borrowed variables are still alive after a function call
+    %
+:- pred borrowed_vars_are_still_alive(list(rs_stmt(Func)), Func, list(int), int) <= rust_tc(Func, Type, Trait).
+:- mode borrowed_vars_are_still_alive(in, in, in, in) is semidet.
 
     % Checks/retrieves the borrowing relationship between two places, given
     % also partially interpreted RPIL instructions of the next statement
@@ -298,12 +320,6 @@ ctx_typing_gen(Stmts_in, Stmts_out, Var, Type) :-
         list.map(ctx_typing_findvar(StmtsR_in), ArgTypes, Args),
         Stmt_out = rs_stmt(L, Fn, Args),
         ctx_typing_gen_chain(StmtsR_in, StmtsR_out, Args, ArgTypes),
-        list.all_true(
-            (pred(Arg::in) is semidet :-
-                ctx_liveness(StmtsR_out, Arg, alive)
-            ),
-            Args
-        ),
         Stmts_out = [Stmt_out | StmtsR_out]
     ;
         ctx_typing_gen(StmtsR_in, StmtsR_out, Var, Type),
@@ -406,14 +422,7 @@ rpil_inst_places(rpil_deref_pin(Op)) = [Op].
 ctx_typing([Stmt | StmtsR], Var, Type) :-
     Stmt = rs_stmt(L, Fn, Args),
     ( Var = L ->
-        list.map(
-            (pred(Arg::in, ArgType::out) is nondet :-
-                ctx_liveness(StmtsR, Arg, alive),
-                ctx_typing(StmtsR, Arg, ArgType)
-            ),
-            Args,
-            ArgTypes
-        ),
+        map_alive_var_types(StmtsR, Fn, Args, ArgTypes),
         fn_typing_tcm(Fn, ArgTypes, RetType),
         type_compatible_tcm(RetType, Type)
     ;
@@ -427,43 +436,72 @@ ctx_typing([Stmt | StmtsR], Var, Type) :-
         ctx_typing(StmtsR, Var, Type)
     ).
 
+map_alive_var_types(Stmts, Fn, Args, ArgTypes) :-
+    map_with_list_remainder(
+        (pred(Arg::in, RemArgs::in, ArgType::out) is nondet :-
+            ctx_liveness_partial(Stmts, Fn, RemArgs, Arg, alive),
+            ctx_typing(Stmts, Arg, ArgType)
+        ),
+        Args,
+        ArgTypes
+    ).
+
+map_with_list_remainder(Pred, List, Results) :-
+    Len = list.length(List),
+    list.map(
+        (pred(Idx::in, Out::out) is nondet :-
+            list.index1(List, Idx, Elem),
+            list.delete_nth(List, Idx, RemList),
+            call(Pred, Elem, RemList, Out)
+        ),
+        1..Len,
+        Results
+    ).
+
 %---------------------%
 
-ctx_liveness(Stmts, _, Liveness) :-
-    Stmts = [rs_stmt_free(_L) | _StmtsR],
-    Liveness = alive.
+ctx_liveness(Stmts, Var, Liveness) :-
+    Stmts = [rs_stmt_free(_L) | StmtsR],
+    ctx_liveness(StmtsR, Var, Liveness).
 ctx_liveness(Stmts, Var, Liveness) :-
     Stmts = [rs_stmt(L, Fn, Args) | StmtsR],
     ctx_typing(Stmts, L, _Type),
     ( Var = L ->
         Liveness = alive
-    ; list.member(Var, Args) ->
-        ctx_liveness(StmtsR, Var, alive),
+    ;
+        ctx_liveness_partial(StmtsR, Fn, Args, Var, Liveness)
+    ).
+
+ctx_liveness_partial(Stmts, _, [], Var, Liveness) :-
+    ctx_liveness(Stmts, Var, Liveness).
+ctx_liveness_partial(Stmts, Fn, Args, Var, Liveness) :-
+    Args = [Arg | ArgsR],
+    ( Var = Arg ->
+        ctx_liveness_partial(Stmts, Fn, ArgsR, Var, alive),
         ( does_not_kill_arguments_tcm(Fn) ->
             Liveness = alive
-        ; ctx_typing(StmtsR, Var, VarType),
+        ; ctx_typing(Stmts, Var, VarType),
           lives_even_after_killing_tcm(VarType) ->
             Liveness = alive
         ;
             Liveness = dead
         )
     ;
-        ctx_liveness(StmtsR, Var, LivenessR),
+        ctx_liveness_partial(Stmts, Fn, ArgsR, Var, LivenessR),
         ( LivenessR = alive,
-          vars_borrowed_before_are_still_alive(Stmts, Var) ->
+          borrowed_vars_are_still_alive(Stmts, Fn, Args, Var) ->
             Liveness = alive
         ;
             Liveness = dead
         )
     ).
 
-vars_borrowed_before_are_still_alive(Stmts, Var) :-
-    Stmts = [_Stmt | StmtsR],
-    Places = ctx_places(StmtsR, Var),
+borrowed_vars_are_still_alive(Stmts, Func, Args, Var) :-
+    Places = ctx_places(Stmts, Var),
     set.all_true(
         (pred(OpL::in) is semidet :-
-            ( ctx_borrowing(StmtsR, OpL, OpR, _Kind) ->
-                ctx_liveness(Stmts, origin(OpR), alive)
+            ( ctx_borrowing(Stmts, OpL, OpR, _Kind) ->
+                ctx_liveness_partial(Stmts, Func, Args, origin(OpR), alive)
             ;
                 true
             )

@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker_test.m
-% Version: 0.1.5
+% Version: 0.1.6
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides tests for `pinchecker' module.
@@ -45,6 +45,7 @@ main(!IO) :-
     run_test_fails(test_lives_even_after_killing_3_fail, "lives_even_after_killing_3", !IO),
     run_test(test_ctx_liveness_1, "ctx_liveness_1", !IO),
     run_test_fails(test_ctx_liveness_2_fail, "ctx_liveness_2", !IO),
+    run_test_fails(test_ctx_liveness_3_fail, "ctx_liveness_3", !IO),
     run_test(test_ctx_places_1, "ctx_places_1", !IO),
     run_test(test_ctx_borrowing_1, "ctx_borrowing_1", !IO),
     run_test(test_ctx_borrowing_2, "ctx_borrowing_2", !IO),
@@ -267,6 +268,7 @@ does_not_kill_arguments(Fn) :-
 :- pred test_lives_even_after_killing_3_fail(unit::in) is semidet.
 :- pred test_ctx_liveness_1(unit::in) is semidet.
 :- pred test_ctx_liveness_2_fail(unit::in) is semidet.
+:- pred test_ctx_liveness_3_fail(unit::in) is semidet.
 :- pred test_ctx_places_1(unit::in) is semidet.
 :- pred test_ctx_borrowing_1(unit::in) is semidet.
 :- pred test_ctx_borrowing_2(unit::in) is semidet.
@@ -298,7 +300,6 @@ test_ctx_typing_1(_) :-
     ],
     ctx_typing(Stmts, 2, store_T(unmovable_T)).
 
-% TODO: fix bugs to make this case pass
 test_ctx_typing_2_fail(_) :-
     Stmts = [
         rs_stmt(2, store_two_new_F, [1, 1]),
@@ -306,7 +307,6 @@ test_ctx_typing_2_fail(_) :-
     ],
     ctx_typing(Stmts, 2, _Type).
 
-% TODO: fix bugs to make this case pass
 test_ctx_typing_3_fail(_) :-
     Stmts = [
         rs_stmt(3, store_two_new_F, [1, 2]),
@@ -363,6 +363,14 @@ test_ctx_liveness_2_fail(_) :-
         rs_stmt(1, borrow_F, [1])
     ],
     ctx_liveness(Stmts, 1, _Liveness).
+
+test_ctx_liveness_3_fail(_) :-
+    Stmts = [
+        rs_stmt_free(3),
+        rs_stmt(2, move_F, [1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_liveness(Stmts, 1, alive).
 
 test_ctx_places_1(_) :-
     Stmts = [
