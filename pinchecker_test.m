@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker_test.m
-% Version: 0.1.4
+% Version: 0.1.5
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides tests for `pinchecker' module.
@@ -38,11 +38,13 @@ main(!IO) :-
     run_test_fails(test_ctx_typing_2_fail, "ctx_typing_2", !IO),
     run_test_fails(test_ctx_typing_3_fail, "ctx_typing_3", !IO),
     run_test(test_ctx_typing_4, "ctx_typing_4", !IO),
+    run_test_fails(test_ctx_typing_5_fail, "ctx_typing_5", !IO),
     run_test(test_ctx_typing_trait_1, "ctx_typing_trait_1", !IO),
     run_test(test_lives_even_after_killing_1, "lives_even_after_killing_1", !IO),
     run_test(test_lives_even_after_killing_2, "lives_even_after_killing_2", !IO),
     run_test_fails(test_lives_even_after_killing_3_fail, "lives_even_after_killing_3", !IO),
     run_test(test_ctx_liveness_1, "ctx_liveness_1", !IO),
+    run_test_fails(test_ctx_liveness_2_fail, "ctx_liveness_2", !IO),
     run_test(test_ctx_places_1, "ctx_places_1", !IO),
     run_test(test_ctx_borrowing_1, "ctx_borrowing_1", !IO),
     run_test(test_ctx_borrowing_2, "ctx_borrowing_2", !IO),
@@ -258,11 +260,13 @@ does_not_kill_arguments(Fn) :-
 :- pred test_ctx_typing_2_fail(unit::in) is semidet.
 :- pred test_ctx_typing_3_fail(unit::in) is semidet.
 :- pred test_ctx_typing_4(unit::in) is semidet.
+:- pred test_ctx_typing_5_fail(unit::in) is semidet.
 :- pred test_ctx_typing_trait_1(unit::in) is semidet.
 :- pred test_lives_even_after_killing_1(unit::in) is semidet.
 :- pred test_lives_even_after_killing_2(unit::in) is semidet.
 :- pred test_lives_even_after_killing_3_fail(unit::in) is semidet.
 :- pred test_ctx_liveness_1(unit::in) is semidet.
+:- pred test_ctx_liveness_2_fail(unit::in) is semidet.
 :- pred test_ctx_places_1(unit::in) is semidet.
 :- pred test_ctx_borrowing_1(unit::in) is semidet.
 :- pred test_ctx_borrowing_2(unit::in) is semidet.
@@ -319,6 +323,14 @@ test_ctx_typing_4(_) :-
     ],
     ctx_typing(Stmts, 3, unit_T).
 
+test_ctx_typing_5_fail(_) :-
+    Stmts = [
+        rs_stmt(3, borrow_F, [1]),
+        rs_stmt(2, move_F, [1]),
+        rs_stmt(1, unmovable_new_F, [])
+    ],
+    ctx_typing(Stmts, 3, _Type).
+
 test_ctx_typing_trait_1(_) :-
     Stmts = [
         rs_stmt(3, pin_new_unchecked_F, [2]),
@@ -338,7 +350,6 @@ test_lives_even_after_killing_2(_) :-
 test_lives_even_after_killing_3_fail(_) :-
     lives_even_after_killing(option_T(mutref_T(unmovable_T))).
 
-% TODO: fix bugs to make this case pass
 test_ctx_liveness_1(_) :-
     Stmts = [
         rs_stmt(3, move_F, [1]),
@@ -346,6 +357,12 @@ test_ctx_liveness_1(_) :-
         rs_stmt(1, unmovable_new_F, [])
     ],
     ctx_liveness(Stmts, 2, dead).
+
+test_ctx_liveness_2_fail(_) :-
+    Stmts = [
+        rs_stmt(1, borrow_F, [1])
+    ],
+    ctx_liveness(Stmts, 1, _Liveness).
 
 test_ctx_places_1(_) :-
     Stmts = [

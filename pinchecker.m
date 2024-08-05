@@ -1,7 +1,7 @@
 %---------------------------------------------------------------------------%
 %
 % File: pinchecker.m
-% Version: 0.1.4
+% Version: 0.1.5
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 %
 % This module provides an compilable implementation of PinChecker.
@@ -221,6 +221,11 @@
 :- pred ctx_typing_findvar(list(rs_stmt(Func)), Type, int) <= rust_tc(Func, Type, Trait).
 :- mode ctx_typing_findvar(in, in, out) is nondet.
 
+    % TODO: doc
+    %
+:- pred vars_borrowed_before_are_still_alive(list(rs_stmt(Func)), int) <= rust_tc(Func, Type, Trait).
+:- mode vars_borrowed_before_are_still_alive(in, in) is semidet.
+
     % Checks/retrieves the borrowing relationship between two places, given
     % also partially interpreted RPIL instructions of the next statement
     %
@@ -401,7 +406,14 @@ rpil_inst_places(rpil_deref_pin(Op)) = [Op].
 ctx_typing([Stmt | StmtsR], Var, Type) :-
     Stmt = rs_stmt(L, Fn, Args),
     ( Var = L ->
-        list.map(ctx_typing(StmtsR), Args, ArgTypes),
+        list.map(
+            (pred(Arg::in, ArgType::out) is nondet :-
+                ctx_liveness(StmtsR, Arg, alive),
+                ctx_typing(StmtsR, Arg, ArgType)
+            ),
+            Args,
+            ArgTypes
+        ),
         fn_typing_tcm(Fn, ArgTypes, RetType),
         type_compatible_tcm(RetType, Type)
     ;
@@ -417,11 +429,12 @@ ctx_typing([Stmt | StmtsR], Var, Type) :-
 
 %---------------------%
 
-ctx_liveness([Stmt | _], _, Liveness) :-
-    Stmt = rs_stmt_free(_L),
+ctx_liveness(Stmts, _, Liveness) :-
+    Stmts = [rs_stmt_free(_L) | _StmtsR],
     Liveness = alive.
-ctx_liveness([Stmt | StmtsR], Var, Liveness) :-
-    Stmt = rs_stmt(L, Fn, Args),
+ctx_liveness(Stmts, Var, Liveness) :-
+    Stmts = [rs_stmt(L, Fn, Args) | StmtsR],
+    ctx_typing(Stmts, L, _Type),
     ( Var = L ->
         Liveness = alive
     ; list.member(Var, Args) ->
@@ -435,7 +448,27 @@ ctx_liveness([Stmt | StmtsR], Var, Liveness) :-
             Liveness = dead
         )
     ;
-        ctx_liveness(StmtsR, Var, Liveness)
+        ctx_liveness(StmtsR, Var, LivenessR),
+        ( LivenessR = alive,
+          vars_borrowed_before_are_still_alive(Stmts, Var) ->
+            Liveness = alive
+        ;
+            Liveness = dead
+        )
+    ).
+
+vars_borrowed_before_are_still_alive(Stmts, Var) :-
+    Stmts = [_Stmt | StmtsR],
+    Places = ctx_places(StmtsR, Var),
+    set.all_true(
+        (pred(OpL::in) is semidet :-
+            ( ctx_borrowing(StmtsR, OpL, OpR, _Kind) ->
+                ctx_liveness(Stmts, origin(OpR), alive)
+            ;
+                true
+            )
+        ),
+        Places
     ).
 
 %---------------------%
@@ -474,15 +507,13 @@ ctx_places([Stmt | StmtsR], Var) = Places :-
 %---------------------%
 
 ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
-    Stmts = [Stmt | StmtsR],
-    Stmt = rs_stmt(L, Fn, Args),
+    Stmts = [rs_stmt(L, Fn, Args) | StmtsR],
     RpilInsts = fn_rpil_reduced(Fn, [L | Args]),
-    ctx_borrowing_partial(StmtsR, RpilInsts, Lhs, Rhs, Kind),
     ctx_liveness(Stmts, origin(Lhs), alive),
+    ctx_borrowing_partial(StmtsR, RpilInsts, Lhs, Rhs, Kind),
     ctx_liveness(Stmts, origin(Rhs), alive).
 ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
-    Stmts = [Stmt | StmtsR],
-    Stmt = rs_stmt_free(_L),
+    Stmts = [rs_stmt_free(_L) | StmtsR],
     ctx_borrowing(StmtsR, Lhs, Rhs, Kind).
 
 ctx_borrowing_partial(Stmts, [], Lhs, Rhs, Kind) :-
@@ -509,13 +540,11 @@ ctx_borrowing_partial(Stmts, Insts, Lhs, Rhs, Kind) :-
 %---------------------%
 
 ctx_pinning(Stmts, Place, Status) :-
-    Stmts = [Stmt | StmtsR],
-    Stmt = rs_stmt(L, Fn, Args),
+    Stmts = [rs_stmt(L, Fn, Args) | StmtsR],
     RpilInsts = fn_rpil_reduced(Fn, [L | Args]),
     ctx_pinning_partial(StmtsR, RpilInsts, Place, Status).
 ctx_pinning(Stmts, Place, Status) :-
-    Stmts = [Stmt | StmtsR],
-    Stmt = rs_stmt_free(_L),
+    Stmts = [rs_stmt_free(_L) | StmtsR],
     ctx_pinning(StmtsR, Place, Status).
 
 ctx_pinning_partial(Stmts, [], Place, Status) :-
