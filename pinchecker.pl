@@ -3,7 +3,7 @@
 % File: pinchecker.pl
 % Description: Generate Rust code that violates the Pin Contract
 %
-% Version: 0.4.0
+% Version: 0.4.1
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- module(pinchecker, [
@@ -183,8 +183,8 @@ ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
         fn_rpil_reduced(Fn, [L | Args], RpilInsts),
         ctx_typing(Stmts, L, _Type),
         ctx_borrowing_partial(StmtsR, RpilInsts, Lhs, Rhs, Kind),
-        origin(VarL, Lhs), ctx_liveness(Stmts, VarL, alive),
-        origin(VarR, Rhs), ctx_liveness(Stmts, VarR, alive).
+        origin_is_alive(Stmts, Lhs),
+        origin_is_alive(Stmts, Rhs).
 
 
 ctx_borrowing_partial(Stmts, [], Lhs, Rhs, Kind) :-
@@ -229,11 +229,19 @@ follow_deref(Stmts, Insts, deref(Op0), Op) :-
         ctx_borrowing_partial(Stmts, Insts, Op1, Op, _Kind).
 
 
-origin(Var, variable(Var)).
-origin(Var, place(Op, _)) :- origin(Var, Op).
-origin(Var, place_ext(Op)) :- origin(Var, Op).
-origin(Var, vairant_place(Op, _, _)) :- origin(Var, Op).
-origin(Var, deref(Op)) :- origin(Var, Op).
+origin_is_alive(Stmts, Op) :-
+        origin(Origin, Op),
+        (   Origin = origin_is_variable(Var) ->
+            ctx_liveness(Stmts, Var, alive)
+        ;   true
+        ).
+
+
+origin(origin_is_variable(Var), variable(Var)).
+origin(origin_is_place_ext, place_ext(_)).
+origin(Origin, place(Op, _)) :- origin(Origin, Op).
+origin(Origin, vairant_place(Op, _, _)) :- origin(Origin, Op).
+origin(Origin, deref(Op)) :- origin(Origin, Op).
 
 
 replace_origin(X0, X0, Y, Y) :- !.
@@ -284,6 +292,7 @@ ctx_pinning_partial(Stmts, Insts, Place, Status) :-
 
 
 containing_place(variable(Var), variable(Var)).
+containing_place(place_ext(Op0), place_ext(Op0)).
 containing_place(Op, place(Op0, _)) :-
         containing_place(Op, Op0).
 containing_place(Op, variant_place(Op0, _, _)) :-

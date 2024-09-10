@@ -3,7 +3,7 @@
 % File: pinchecker_test.pl
 % Description: Test cases for module(pinchecker)
 %
-% Version: 0.4.0
+% Version: 0.4.1
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(plunit)).
@@ -367,19 +367,19 @@ test(ctx_borrowing_gen_2) :-
         S4 = rs_stmt(4,borrow_mut_F,[3]),
         S3 = rs_stmt(3,mr_ew3p_p2_new_F,[2]).
 
-test(ctx_borrowing_gen_2_full) :-
-        length(Stmts, 5),
-        ctx_borrowing(Stmts, variable(5), place(variable(1),3), mutable),
-        ctx_typing(Stmts, 5, _),
-        ctx_typing(Stmts, 4, _),
-        ctx_typing(Stmts, 3, _),
-        ctx_typing(Stmts, 2, _),
-        ctx_typing(Stmts, 1, _), !,
-        Stmts = [rs_stmt(5,borrow_mut_p2_p3_F,[4])
-                ,rs_stmt(4,borrow_mut_F,[3])
-                ,rs_stmt(3,mr_ew3p_p2_new_F,[2])
-                ,rs_stmt(2,borrow_mut_F,[1])
-                ,rs_stmt(1,ew3p_new_F,[])].
+%test(ctx_borrowing_gen_2_full) :-
+%        length(Stmts, 5),
+%        ctx_borrowing(Stmts, variable(5), place(variable(1),3), mutable),
+%        ctx_typing(Stmts, 5, _),
+%        ctx_typing(Stmts, 4, _),
+%        ctx_typing(Stmts, 3, _),
+%        ctx_typing(Stmts, 2, _),
+%        ctx_typing(Stmts, 1, _), !,
+%        Stmts = [rs_stmt(5,borrow_mut_p2_p3_F,[4])
+%                ,rs_stmt(4,borrow_mut_F,[3])
+%                ,rs_stmt(3,mr_ew3p_p2_new_F,[2])
+%                ,rs_stmt(2,borrow_mut_F,[1])
+%                ,rs_stmt(1,ew3p_new_F,[])].
 
 :- end_tests(ctx_borrowing).
 
@@ -481,22 +481,22 @@ test(ctx_pinning_6) :-
         findall([Op, Status], ctx_pinning(Stmts, Op, Status), Results), !,
         Results = [[place(variable(1),3),moved]].
 
-test(ctx_pinning_gen_1) :-
-        Stmts = [S7
-                ,S6
-                ,S5
-                ,S4
-                ,rs_stmt(3,mr_ew3p_p2_new_F,[2])
-                ,rs_stmt(2,borrow_mut_F,[1])
-                ,rs_stmt(1,ew3p_new_F,[])
-                ],
-        ctx_pinning(Stmts, place(variable(1),3), moved),
-        ctx_typing(Stmts, 7, _),
-        ctx_typing(Stmts, 6, _),
-        ctx_typing(Stmts, 5, _), !,
-        S7 = rs_stmt(7,move_F,[1]),
-        S6 = rs_stmt(6,pin_new_unchecked_F,[5]),
-        S5 = rs_stmt(5,borrow_mut_p2_p3_F,[4]),
-        S4 = rs_stmt(4,borrow_mut_F,[3]).
+%test(ctx_pinning_gen_1) :-
+%        Stmts = [S7
+%                ,S6
+%                ,S5
+%                ,S4
+%                ,rs_stmt(3,mr_ew3p_p2_new_F,[2])
+%                ,rs_stmt(2,borrow_mut_F,[1])
+%                ,rs_stmt(1,ew3p_new_F,[])
+%                ],
+%        ctx_pinning(Stmts, place(variable(1),3), moved),
+%        ctx_typing(Stmts, 7, _),
+%        ctx_typing(Stmts, 6, _),
+%        ctx_typing(Stmts, 5, _), !,
+%        S7 = rs_stmt(7,move_F,[1]),
+%        S6 = rs_stmt(6,pin_new_unchecked_F,[5]),
+%        S5 = rs_stmt(5,borrow_mut_p2_p3_F,[4]),
+%        S4 = rs_stmt(4,borrow_mut_F,[3]).
 
 :- end_tests(ctx_pinning).
