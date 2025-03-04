@@ -1,9 +1,9 @@
 % -*- coding: iso_8859_1 -*-
 %
 % File: pinchecker.pl
-% Description: Generate Rust code that violates the Pin Contract
+% Description: Generate Rust code that violates the pinning API contract
 %
-% Version: 0.4.1
+% Version: 0.5.0
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- module(pinchecker, [
@@ -13,17 +13,19 @@
     rpil_term_reduction/3,
     ctx_typing/3,
     ctx_liveness/3,
-    lives_even_after_killing/1,
-    ctx_borrowing/4,
+    ctx_borrowing/3,
     follow_deref/4,
-    ctx_pinning/3
+    ctx_pinning/3,
+    validate_liveness/1
 ]).
 
 :- use_module(library(lists)).
 
 :- multifile fn_typing/3.
 :- multifile fn_rpil/2.
-:- multifile impl_trait/2.
+:- multifile ty_typing/3.
+:- multifile ty_impl_trait/2.
+:- multifile lives_even_after_killing/1.
 :- multifile does_not_kill_arguments/1.
 
 
@@ -65,23 +67,16 @@ rpil_inst_reduction(Ops, rpil_bind(Term1, Term2), Inst) :-
         rpil_term_reduction(Ops, Term1, TermR1), !,
         rpil_term_reduction(Ops, Term2, TermR2), !,
         Inst = rpil_bind(TermR1, TermR2).
-rpil_inst_reduction(Ops, rpil_move(Term), Inst) :-
-        rpil_term_reduction(Ops, Term, TermR), !,
-        Inst = rpil_move(TermR).
 rpil_inst_reduction(Ops, rpil_borrow(Term1, Term2), Inst) :-
         rpil_term_reduction(Ops, Term1, TermR1), !,
         rpil_term_reduction(Ops, Term2, TermR2), !,
         Inst = rpil_borrow(TermR1, TermR2).
-rpil_inst_reduction(Ops, rpil_borrow_mut(Term1, Term2), Inst) :-
-        rpil_term_reduction(Ops, Term1, TermR1), !,
-        rpil_term_reduction(Ops, Term2, TermR2), !,
-        Inst = rpil_borrow_mut(TermR1, TermR2).
-rpil_inst_reduction(Ops, rpil_deref_move(Term), Inst) :-
-        rpil_term_reduction(Ops, Term, TermR), !,
-        Inst = rpil_deref_move(TermR).
 rpil_inst_reduction(Ops, rpil_deref_pin(Term), Inst) :-
         rpil_term_reduction(Ops, Term, TermR), !,
         Inst = rpil_deref_pin(TermR).
+rpil_inst_reduction(Ops, rpil_deref_move(Term), Inst) :-
+        rpil_term_reduction(Ops, Term, TermR), !,
+        Inst = rpil_deref_move(TermR).
 
 
 %% rpil_term_reduction(+Ops, +Term, -TermReduced) is det
@@ -101,9 +96,6 @@ rpil_term_reduction(Ops, place(Term, P), Reduced) :-
 rpil_term_reduction(Ops, place_ext(Term), Reduced) :-
         rpil_term_reduction(Ops, Term, TermR), !,
         Reduced = place_ext(TermR).
-rpil_term_reduction(Ops, variant_place(Term, V, P), Reduced) :-
-        rpil_term_reduction(Ops, Term, TermR), !,
-        Reduced = variant_place(TermR, V, P).
 rpil_term_reduction(Ops, deref(Term), Reduced) :-
         rpil_term_reduction(Ops, Term, TermR), !,
         Reduced = deref(TermR).
@@ -122,24 +114,48 @@ ctx_typing(Stmts, Var, Type) :-
         Stmt = rs_stmt(L, Fn, Args),
         (   Var = L,
             fn_typing(Fn, ArgTypes, Type),
-            maplist(alive_var_type(StmtsR), Args, ArgTypes)
+            maplist(ctx_typing(StmtsR), Args, ArgTypes)
         ;   ctx_typing(StmtsR, Var, Type)
         ).
 
 
-alive_var_type(Stmts, Var, Type) :-
-    ctx_liveness(Stmts, Var, alive),
-    ctx_typing(Stmts, Var, Type).
+op_impls_non_unpin(Stmts, Op) :-
+        op_type(Stmts, Op, Type),
+        ty_impl_trait(Type, non_unpin_Tr).
 
 
-%% ctx_liveness(?Stmts, ?Var, ?Liveness) is nondet
-%
-%  Determines if a variable is alive in the context of given statements
-%
-%  @param Stmts         List of statements
-%  @param Var           The variable to check
-%  @param Liveness      'alive' or 'dead'
-%
+op_type(Stmts, variable(VarN), Type) :- ctx_typing(Stmts, VarN, Type).
+op_type(Stmts, place(Op, PlaceN), Type) :-
+        op_type(Stmts, Op, OwnerType),
+        ty_typing(OwnerType, PlaceN, Type).
+op_type(Stmts, place_ext(Op), Type) :-
+        op_type(Stmts, Op, OwnerType),
+        ty_typing(OwnerType, ext, Type).
+
+
+validate_liveness([]).
+validate_liveness([Stmt | StmtsR]) :-
+        Stmt = rs_stmt(_L, _Fn, Args),
+        maplist(is_alive_and_valid(StmtsR), Args),
+        validate_liveness(StmtsR).
+
+
+is_alive_and_valid(Stmts, VarN) :-
+        ctx_liveness(Stmts, VarN, alive),
+        \+ (
+            ctx_borrowing(Stmts, Lhs, Rhs),
+            belongs_to(Lhs, variable(VarN)),
+            belongs_to(Rhs, variable(VarN1)),
+            ctx_liveness(Stmts, VarN1, dead)
+        ).
+
+
+belongs_to(variable(VarN), variable(VarN)).
+belongs_to(place_ext(Op), place_ext(Op)).
+belongs_to(place(Op, _), Var) :- belongs_to(Op, Var).
+belongs_to(deref(Op), Var) :- belongs_to(Op, Var).
+
+
 ctx_liveness(Stmts, Var, Liveness) :-
         length(Stmts, L), Stmts = [Stmt | StmtsR],
         Stmt = rs_stmt(L, Fn, Args),
@@ -158,53 +174,34 @@ ctx_liveness(Stmts, Var, Liveness) :-
         ).
 
 
-%% lives_even_after_killing(+Type) is semidet
-%
-%  Checks if a type lives even after being killed
-%
-%  @param Type  The type to check
-%
-lives_even_after_killing(mutref_T(_)) :- !.
-lives_even_after_killing(T) :- impl_trait(T, copy_Tr).
-
-
-%% ctx_borrowing(?Stmts, ?Lhs, ?Rhs, ?Kind) is nondet
+%% ctx_borrowing(?Stmts, ?Lhs, ?Rhs) is nondet
 %
 %  Determines borrowing relationships between variables
 %
 %  @param Stmts List of statements
 %  @param Lhs   Left-hand side of the borrowing relationship
 %  @param Rhs   Right-hand side of the borrowing relationship
-%  @param Kind  Type of borrowing ('shared' or 'mutable')
 %
-ctx_borrowing(Stmts, Lhs, Rhs, Kind) :-
+ctx_borrowing(Stmts, Lhs, Rhs) :-
         length(Stmts, L), Stmts = [Stmt | StmtsR],
         Stmt = rs_stmt(L, Fn, Args),
         fn_rpil_reduced(Fn, [L | Args], RpilInsts),
         ctx_typing(Stmts, L, _Type),
-        ctx_borrowing_partial(StmtsR, RpilInsts, Lhs, Rhs, Kind),
-        origin_is_alive(Stmts, Lhs),
-        origin_is_alive(Stmts, Rhs).
+        ctx_borrowing_partial(StmtsR, RpilInsts, Lhs, Rhs).
 
 
-ctx_borrowing_partial(Stmts, [], Lhs, Rhs, Kind) :-
-         ctx_borrowing(Stmts, Lhs, Rhs, Kind).
-ctx_borrowing_partial(Stmts, Insts, Lhs, Rhs, Kind) :-
+ctx_borrowing_partial(Stmts, [], Lhs, Rhs) :-
+         ctx_borrowing(Stmts, Lhs, Rhs).
+ctx_borrowing_partial(Stmts, Insts, Lhs, Rhs) :-
         Insts = [Inst | InstsR],
         (   Inst = rpil_borrow(PL, PR),
             (   follow_deref(Stmts, Insts, PL, Lhs) ->
-                follow_deref(Stmts, Insts, PR, Rhs),
-                Kind = shared
-            )
-        ;   Inst = rpil_borrow_mut(PL, PR),
-            (   follow_deref(Stmts, Insts, PL, Lhs) ->
-                follow_deref(Stmts, Insts, PR, Rhs),
-                Kind = mutable
+                follow_deref(Stmts, Insts, PR, Rhs)
             )
         ;   Inst = rpil_bind(PL, PR), % TODO: Also apply follow_deref on PL and PR
-            ctx_borrowing_partial(Stmts, InstsR, Prev, Rhs, Kind),
+            ctx_borrowing_partial(Stmts, InstsR, Prev, Rhs),
             replace_origin(Lhs, PL, PR, Prev)
-        ;   ctx_borrowing_partial(Stmts, InstsR, Lhs, Rhs, Kind)
+        ;   ctx_borrowing_partial(Stmts, InstsR, Lhs, Rhs)
         ).
 
 
@@ -222,34 +219,15 @@ follow_deref(Stmts, Insts, place(Op0, P), place(Op, P)) :-
         follow_deref(Stmts, Insts, Op0, Op).
 follow_deref(Stmts, Insts, place_ext(Op0), place_ext(Op)) :-
         follow_deref(Stmts, Insts, Op0, Op).
-follow_deref(Stmts, Insts, variant_place(Op0, V, P), variant_place(Op, V, P)) :-
-        follow_deref(Stmts, Insts, Op0, Op).
 follow_deref(Stmts, Insts, deref(Op0), Op) :-
         follow_deref(Stmts, Insts, Op0, Op1),
-        ctx_borrowing_partial(Stmts, Insts, Op1, Op, _Kind).
-
-
-origin_is_alive(Stmts, Op) :-
-        origin(Origin, Op),
-        (   Origin = origin_is_variable(Var) ->
-            ctx_liveness(Stmts, Var, alive)
-        ;   true
-        ).
-
-
-origin(origin_is_variable(Var), variable(Var)).
-origin(origin_is_place_ext, place_ext(_)).
-origin(Origin, place(Op, _)) :- origin(Origin, Op).
-origin(Origin, vairant_place(Op, _, _)) :- origin(Origin, Op).
-origin(Origin, deref(Op)) :- origin(Origin, Op).
+        ctx_borrowing_partial(Stmts, Insts, Op1, Op).
 
 
 replace_origin(X0, X0, Y, Y) :- !.
 replace_origin(place(X0, P), X, Y, place(Y0, P)) :-
         replace_origin(X0, X, Y, Y0).
 replace_origin(place_ext(X0), X, Y, place_ext(Y0)) :-
-        replace_origin(X0, X, Y, Y0).
-replace_origin(variant_place(X0, V, P), X, Y, variant_place(Y0, V, P)) :-
         replace_origin(X0, X, Y, Y0).
 replace_origin(deref(X0), X, Y, deref(Y0)) :-
         replace_origin(X0, X, Y, Y0).
@@ -261,14 +239,15 @@ replace_origin(deref(X0), X, Y, deref(Y0)) :-
 %
 %  @param Stmts         List of statements
 %  @param Place         The place to check
-%  @param Status        'pinned' or 'moved'
+%  @param Status        'pinned' or 'pinned_moved'
 %
 ctx_pinning(Stmts, Place, Status) :-
         length(Stmts, L), Stmts = [Stmt | StmtsR],
         Stmt = rs_stmt(L, Fn, Args),
         fn_rpil_reduced(Fn, [L | Args], RpilInsts),
         ctx_typing(Stmts, L, _Type),
-        ctx_pinning_partial(StmtsR, RpilInsts, Place, Status).
+        ctx_pinning_partial(StmtsR, RpilInsts, Place, Status),
+        op_impls_non_unpin(Stmts, Place).
 
 
 ctx_pinning_partial(Stmts, [], Place, Status) :-
@@ -277,16 +256,13 @@ ctx_pinning_partial(Stmts, Insts, Place, Status) :-
         Insts = [Inst | InstsR],
         (   ctx_pinning_partial(Stmts, InstsR, Place, StatusR) ->
             (   Inst = rpil_deref_move(BrwConPlace),
-                ctx_borrowing_partial(Stmts, InstsR, BrwConPlace, ConPlace, _Kind),
+                ctx_borrowing_partial(Stmts, InstsR, BrwConPlace, ConPlace),
                 containing_place(ConPlace, Place) ->
-                Status = moved
-            ;   Inst = rpil_move(ConPlace),
-                containing_place(ConPlace, Place) ->
-                Status = moved
+                Status = pinned_moved
             ;   Status = StatusR
             )
         ;   Inst = rpil_deref_pin(BrwPlace),
-            ctx_borrowing_partial(Stmts, InstsR, BrwPlace, Place, _Kind),
+            ctx_borrowing_partial(Stmts, InstsR, BrwPlace, Place),
             Status = pinned
         ).
 
@@ -294,6 +270,4 @@ ctx_pinning_partial(Stmts, Insts, Place, Status) :-
 containing_place(variable(Var), variable(Var)).
 containing_place(place_ext(Op0), place_ext(Op0)).
 containing_place(Op, place(Op0, _)) :-
-        containing_place(Op, Op0).
-containing_place(Op, variant_place(Op0, _, _)) :-
         containing_place(Op, Op0).

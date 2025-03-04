@@ -3,7 +3,7 @@
 % File: pinchecker_test.pl
 % Description: Test cases for module(pinchecker)
 %
-% Version: 0.4.1
+% Version: 0.5.0
 % Author: Yuxuan Dai <yxdai@smail.nju.edu.cn>
 
 :- use_module(library(plunit)).
@@ -15,7 +15,7 @@
 :- multifile pinchecker:does_not_kill_arguments/1.
 
 
-pinchecker:fn_typing(move_F, [T], T).
+pinchecker:fn_typing(bind_F, [T], T).
 pinchecker:fn_typing(deref_move_F, [mutref_T(_)], unit_T).
 pinchecker:fn_typing(borrow_F, [T], ref_T(T)).
 pinchecker:fn_typing(borrow_mut_F, [T], mutref_T(T)).
@@ -25,8 +25,7 @@ pinchecker:fn_typing(pin_macro_F, [T], pin_T(mutref_T(T))).
 pinchecker:fn_typing(unmovable_new_F, [], unmovable_T).
 pinchecker:fn_typing(borrow_mut_option_p1_F, [mutref_T(option_T(T))], mutref_T(T)).
 pinchecker:fn_typing(store_new_F, [T], store_T(T)).
-pinchecker:fn_typing(pin_new_unchecked_F, [Ptr], pin_T(Ptr)) :-
-        pinchecker:impl_trait(Ptr, deref_Tr(_)).
+pinchecker:fn_typing(pin_new_unchecked_F, [mutref_T(T)], pin_T(mutref_T(T))).
 pinchecker:fn_typing(kill_two_F, [_, _], unit_T).
 pinchecker:fn_typing(store_two_new_F, [T1, T2], store_two_T(T1, T2)).
 pinchecker:fn_typing(ew3p_new_F, [], ew3p_T).
@@ -34,9 +33,8 @@ pinchecker:fn_typing(mr_ew3p_p2_new_F, [mutref_T(ew3p_T)], mr_ew3p_p2_T).
 pinchecker:fn_typing(borrow_mut_p2_p3_F, [mutref_T(mr_ew3p_p2_T)], mutref_T(ew3p_p3_T)).
 
 
-pinchecker:fn_rpil(move_F,
+pinchecker:fn_rpil(bind_F,
         [ rpil_bind(arg(0), arg(1))
-        , rpil_move(arg(1))
         ]).
 pinchecker:fn_rpil(deref_move_F,
         [ rpil_deref_move(arg(1))
@@ -45,27 +43,24 @@ pinchecker:fn_rpil(borrow_F,
         [ rpil_borrow(arg(0), arg(1))
         ]).
 pinchecker:fn_rpil(borrow_mut_F,
-        [ rpil_borrow_mut(arg(0), arg(1))
+        [ rpil_borrow(arg(0), arg(1))
         ]).
 pinchecker:fn_rpil(option_some_F,
         [ rpil_bind(place(arg(0),1), arg(1))
-        , rpil_move(arg(1))
         ]).
 pinchecker:fn_rpil(option_none_F,
         [ ]).
 pinchecker:fn_rpil(pin_macro_F,
         [ rpil_deref_pin(arg(0))
-        , rpil_borrow_mut(arg(0), place_ext(arg(0)))
-        , rpil_move(arg(1))
+        , rpil_borrow(arg(0), place_ext(arg(0)))
         ]).
 pinchecker:fn_rpil(unmovable_new_F,
         [ ]).
 pinchecker:fn_rpil(borrow_mut_option_p1_F,
-        [ rpil_borrow_mut(arg(0), place(deref(arg(1)),1))
+        [ rpil_borrow(arg(0), place(deref(arg(1)),1))
         ]).
 pinchecker:fn_rpil(store_new_F,
         [ rpil_bind(place(arg(0),1), arg(1))
-        , rpil_move(arg(1))
         ]).
 pinchecker:fn_rpil(pin_new_unchecked_F,
         [ rpil_bind(arg(0), arg(1))
@@ -75,9 +70,7 @@ pinchecker:fn_rpil(kill_two_F,
         [ ]).
 pinchecker:fn_rpil(store_two_new_F,
         [ rpil_bind(place(arg(0),2), arg(2))
-        , rpil_move(arg(2))
         , rpil_bind(place(arg(0),1), arg(1))
-        , rpil_move(arg(1))
         ]).
 pinchecker:fn_rpil(ew3p_new_F,
         [ ]).
@@ -85,16 +78,24 @@ pinchecker:fn_rpil(mr_ew3p_p2_new_F,
         [ rpil_bind(place(arg(0),2), arg(1))
         ]).
 pinchecker:fn_rpil(borrow_mut_p2_p3_F,
-        [ rpil_borrow_mut(arg(0), place(deref(place(deref(arg(1)),2)),3))
+        [ rpil_borrow(arg(0), place(deref(place(deref(arg(1)),2)),3))
         ]).
 
 
-pinchecker:impl_trait(ref_T(_), copy_Tr) :- !.
-pinchecker:impl_trait(option_T(T), copy_Tr) :-
-        pinchecker:impl_trait(T, copy_Tr).
-pinchecker:impl_trait(ref_T(T), deref_Tr(target(T))).
-pinchecker:impl_trait(mutref_T(T), deref_Tr(target(T))).
-pinchecker:impl_trait(mutref_T(T), derefmut_Tr(target(T))).
+pinchecker:ty_typing(option_T(T), 1, T).
+pinchecker:ty_typing(store_T(T), 1, T).
+pinchecker:ty_typing(store_two_T(T1, _), 1, T1).
+pinchecker:ty_typing(store_two_T(_, T2), 2, T2).
+pinchecker:ty_typing(ew3p_T, 3, ew3p_p3_T).
+pinchecker:ty_typing(mr_ew3p_p2_T, 2, mutref_T(ew3p_T)).
+
+
+pinchecker:ty_impl_trait(unmovable_T, non_unpin_Tr).
+pinchecker:ty_impl_trait(ew3p_p3_T, non_unpin_Tr).
+
+
+pinchecker:lives_even_after_killing(ref_T(_)).
+pinchecker:lives_even_after_killing(mutref_T(_)).
 
 
 pinchecker:does_not_kill_arguments(borrow_F).
@@ -120,7 +121,7 @@ test(fn_rpil_reduced_1) :-
         fn_rpil_reduced(borrow_F, [5 | [3]], [rpil_borrow(variable(5), variable(3))]).
 
 test(fn_rpil_reduced_2) :-
-        fn_rpil_reduced(move_F, [7 | [2]], [rpil_bind(variable(7), variable(2)), rpil_move(variable(2))]).
+        fn_rpil_reduced(deref_move_F, [7 | [2]], [rpil_deref_move(variable(2))]).
 
 :- end_tests(rpil).
 
@@ -133,10 +134,10 @@ test(ctx_typing_1, [nondet]) :-
 
 test(ctx_typing_2) :-
         ctx_typing(Stmts, 2, unmovable_T), !,
-        Stmts = [rs_stmt(2,move_F,[1]),rs_stmt(1,unmovable_new_F,[])].
+        Stmts = [rs_stmt(2,bind_F,[1]),rs_stmt(1,unmovable_new_F,[])].
 
 test(ctx_typing_3) :-
-        Stmts = [rs_stmt(3,move_F,[2])
+        Stmts = [rs_stmt(3,bind_F,[2])
                 ,rs_stmt(2,unmovable_new_F,[])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
@@ -164,18 +165,19 @@ test(ctx_typing_6, [fail]) :-
 
 test(ctx_typing_7, [fail]) :-
         Stmts = [rs_stmt(3,borrow_F,[1])
-                ,rs_stmt(2,move_F,[1])
+                ,rs_stmt(2,bind_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
-        ctx_typing(Stmts, 3, _Type).
+        ctx_typing(Stmts, 3, _Type),
+        validate_liveness(Stmts).
 
-test(ctx_typing_trait_1) :-
+test(ctx_typing_8) :-
         Stmts = [rs_stmt(3,pin_new_unchecked_F,[2])
-                ,rs_stmt(2,borrow_F,[1])
+                ,rs_stmt(2,borrow_mut_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])],
         findall([Var, Type], ctx_typing(Stmts, Var, Type), Results), !,
-        Results = [[3,pin_T(ref_T(unmovable_T))]
-                  ,[2,ref_T(unmovable_T)]
+        Results = [[3,pin_T(mutref_T(unmovable_T))]
+                  ,[2,mutref_T(unmovable_T)]
                   ,[1,unmovable_T]
                   ].
 
@@ -184,17 +186,8 @@ test(ctx_typing_trait_1) :-
 
 :- begin_tests(ctx_liveness).
 
-test(lives_even_after_killing_1) :-
-        lives_even_after_killing(mutref_T(_)).
-
-test(lives_even_after_killing_2) :-
-        lives_even_after_killing(option_T(ref_T(_))).
-
-test(lives_even_after_killing_3, [fail]) :-
-        lives_even_after_killing(option_T(mutref_T(_))).
-
 test(ctx_liveness_1) :-
-        Stmts = [rs_stmt(2,move_F,[1])
+        Stmts = [rs_stmt(2,bind_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
         findall(Liveness, ctx_liveness(Stmts, 1, Liveness), Results), !,
@@ -202,16 +195,18 @@ test(ctx_liveness_1) :-
 
 test(ctx_liveness_2, [fail]) :-
         Stmts = [rs_stmt(1,borrow_F,[1])],
-        ctx_liveness(Stmts, 1, _Liveness).
+        ctx_liveness(Stmts, 1, _Liveness),
+        validate_liveness(Stmts).
 
 test(ctx_liveness_3, [fail]) :-
-        Stmts = [rs_stmt(2,move_F,[1])
+        Stmts = [rs_stmt(2,bind_F,[1])
                 ,rs_stmt(1,borrow_F,[1])
                 ],
-        ctx_liveness(Stmts, 1, _Liveness).
+        ctx_liveness(Stmts, 1, _Liveness),
+        validate_liveness(Stmts).
 
 test(ctx_liveness_4) :-
-        Stmts = [rs_stmt(3,move_F,[2])
+        Stmts = [rs_stmt(3,bind_F,[2])
                 ,rs_stmt(2,borrow_mut_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
@@ -237,7 +232,7 @@ test(ctx_liveness_6) :-
 
 % [Expected Behevior] The reference stays alive even if the referenced variable is killed
 test(ctx_liveness_7) :-
-        Stmts = [rs_stmt(3,move_F,[1])
+        Stmts = [rs_stmt(3,bind_F,[1])
                 ,rs_stmt(2,borrow_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
@@ -250,7 +245,7 @@ test(ctx_liveness_gen_1) :-
         ctx_liveness(Stmts, 1, dead),
         ctx_typing(Stmts, 2, _),
         ctx_typing(Stmts, 1, _), !,
-        Stmts = [rs_stmt(2,move_F,[1])
+        Stmts = [rs_stmt(2,bind_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ].
 
@@ -260,10 +255,10 @@ test(ctx_liveness_gen_1) :-
 :- begin_tests(follow_deref).
 
 test(ctx_borrowing_follow_deref_1, [fail]) :-
-        ctx_borrowing([funcall(1,borrow_F,[_])], _Lhs, _Rhs, _Kind).
+        ctx_borrowing([rs_stmt(1,borrow_F,[_])], _Lhs, _Rhs).
 
 test(ctx_pinning_follow_deref_1, [fail]) :-
-        ctx_pinning([funcall(1,borrow_F,[_])], _Op, _Status).
+        ctx_pinning([rs_stmt(1,borrow_F,[_])], _Op, _Status).
 
 test(follow_deref_1) :-
         Stmts = [rs_stmt(4,borrow_mut_F,[3])
@@ -281,43 +276,43 @@ test(follow_deref_1) :-
 
 test(ctx_borrowing_1, [fail]) :-
         Stmts = [rs_stmt(1,borrow_F,[1])],
-        ctx_borrowing(Stmts, variable(1), variable(1), shared).
+        ctx_borrowing(Stmts, variable(1), variable(1)).
 
 test(ctx_borrowing_2) :-
         Stmts = [rs_stmt(2,borrow_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
-        findall([Lhs, Rhs ,Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
-        Results = [[variable(2),variable(1),shared]].
+        findall([Lhs, Rhs], ctx_borrowing(Stmts, Lhs, Rhs), Results), !,
+        Results = [[variable(2),variable(1)]].
 
 test(ctx_borrowing_3) :-
         Stmts = [rs_stmt(3,option_some_F,[2])
                 ,rs_stmt(2,borrow_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
-        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
-        Results = [[place(variable(3),1),variable(1),shared]
-                 ,[variable(2),variable(1),shared]].
+        findall([Lhs, Rhs], ctx_borrowing(Stmts, Lhs, Rhs), Results), !,
+        Results = [[place(variable(3),1),variable(1)]
+                  ,[variable(2),variable(1)]].
 
 test(ctx_borrowing_4) :-
-        Stmts = [rs_stmt(5,move_F,[4])
+        Stmts = [rs_stmt(5,bind_F,[4])
                 ,rs_stmt(4,option_some_F,[3])
                 ,rs_stmt(3,option_some_F,[2])
                 ,rs_stmt(2,borrow_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
-        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
-        Results = [[place(place(variable(5),1),1),variable(1),shared]
-                 ,[place(place(variable(4),1),1),variable(1),shared]
-                 ,[place(variable(3),1),variable(1),shared]
-                 ,[variable(2),variable(1),shared]].
+        findall([Lhs, Rhs], ctx_borrowing(Stmts, Lhs, Rhs), Results), !,
+        Results = [[place(place(variable(5),1),1),variable(1)]
+                  ,[place(place(variable(4),1),1),variable(1)]
+                  ,[place(variable(3),1),variable(1)]
+                  ,[variable(2),variable(1)]].
 
 test(ctx_borrowing_5) :-
         Stmts = [rs_stmt(2,pin_macro_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
-        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
-        Results = [[variable(2),place_ext(variable(2)),mutable]].
+        findall([Lhs, Rhs], ctx_borrowing(Stmts, Lhs, Rhs), Results), !,
+        Results = [[variable(2),place_ext(variable(2))]].
 
 test(ctx_borrowing_6) :-
         Stmts = [rs_stmt(4,borrow_mut_option_p1_F,[3])
@@ -325,9 +320,9 @@ test(ctx_borrowing_6) :-
                 ,rs_stmt(2,option_some_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
-        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
-        Results = [[variable(4),place(variable(2),1),mutable]
-                 ,[variable(3),variable(2),mutable]].
+        findall([Lhs, Rhs], ctx_borrowing(Stmts, Lhs, Rhs), Results), !,
+        Results = [[variable(4),place(variable(2),1)]
+                 ,[variable(3),variable(2)]].
 
 test(ctx_borrowing_7) :-
         Stmts = [rs_stmt(5,borrow_mut_p2_p3_F,[4])
@@ -336,15 +331,15 @@ test(ctx_borrowing_7) :-
                 ,rs_stmt(2,borrow_mut_F,[1])
                 ,rs_stmt(1,ew3p_new_F,[])
                 ],
-        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
-        Results = [[variable(5),place(variable(1),3),mutable]
-                 ,[variable(4),variable(3),mutable]
-                 ,[place(variable(3),2),variable(1),mutable]
-                 ,[variable(2),variable(1),mutable]].
+        findall([Lhs, Rhs], ctx_borrowing(Stmts, Lhs, Rhs), Results), !,
+        Results = [[variable(5),place(variable(1),3)]
+                 ,[variable(4),variable(3)]
+                 ,[place(variable(3),2),variable(1)]
+                 ,[variable(2),variable(1)]].
 
 test(ctx_borrowing_gen_1) :-
         length(Stmts, 3),
-        ctx_borrowing(Stmts, place(variable(3),1), variable(1), shared),
+        ctx_borrowing(Stmts, place(variable(3),1), variable(1)),
         ctx_typing(Stmts, 3, _),
         ctx_typing(Stmts, 2, _),
         ctx_typing(Stmts, 1, _), !,
@@ -359,7 +354,7 @@ test(ctx_borrowing_gen_2) :-
                 ,rs_stmt(2,borrow_mut_F,[1])
                 ,rs_stmt(1,ew3p_new_F,[])
                 ],
-        ctx_borrowing(Stmts, variable(5), place(variable(1),3), mutable),
+        ctx_borrowing(Stmts, variable(5), place(variable(1),3)),
         ctx_typing(Stmts, 5, _),
         ctx_typing(Stmts, 4, _),
         ctx_typing(Stmts, 3, _), !,
@@ -367,19 +362,19 @@ test(ctx_borrowing_gen_2) :-
         S4 = rs_stmt(4,borrow_mut_F,[3]),
         S3 = rs_stmt(3,mr_ew3p_p2_new_F,[2]).
 
-%test(ctx_borrowing_gen_2_full) :-
-%        length(Stmts, 5),
-%        ctx_borrowing(Stmts, variable(5), place(variable(1),3), mutable),
-%        ctx_typing(Stmts, 5, _),
-%        ctx_typing(Stmts, 4, _),
-%        ctx_typing(Stmts, 3, _),
-%        ctx_typing(Stmts, 2, _),
-%        ctx_typing(Stmts, 1, _), !,
-%        Stmts = [rs_stmt(5,borrow_mut_p2_p3_F,[4])
-%                ,rs_stmt(4,borrow_mut_F,[3])
-%                ,rs_stmt(3,mr_ew3p_p2_new_F,[2])
-%                ,rs_stmt(2,borrow_mut_F,[1])
-%                ,rs_stmt(1,ew3p_new_F,[])].
+% test(ctx_borrowing_gen_2_full) :-
+%         length(Stmts, 5),
+%         ctx_borrowing(Stmts, variable(5), place(variable(1),3)),
+%         ctx_typing(Stmts, 5, _),
+%         ctx_typing(Stmts, 4, _),
+%         ctx_typing(Stmts, 3, _),
+%         ctx_typing(Stmts, 2, _),
+%         ctx_typing(Stmts, 1, _), !,
+%         Stmts = [rs_stmt(5,borrow_mut_p2_p3_F,[4])
+%                 ,rs_stmt(4,borrow_mut_F,[3])
+%                 ,rs_stmt(3,mr_ew3p_p2_new_F,[2])
+%                 ,rs_stmt(2,borrow_mut_F,[1])
+%                 ,rs_stmt(1,ew3p_new_F,[])].
 
 :- end_tests(ctx_borrowing).
 
@@ -387,12 +382,12 @@ test(ctx_borrowing_gen_2) :-
 :- begin_tests(ctx_borrowing_liveness).
 
 test(ctx_borrowing_liveness_1) :-
-        Stmts = [rs_stmt(3,move_F,[1])
+        Stmts = [rs_stmt(3,bind_F,[1])
                 ,rs_stmt(2,borrow_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
-        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
-        Results = [].
+        findall([Lhs, Rhs], ctx_borrowing(Stmts, Lhs, Rhs), Results), !,
+        Results = [[variable(2),variable(1)]].
 
 test(ctx_borrowing_liveness_2) :-
         Stmts = [rs_stmt(5,store_new_F,[4])
@@ -401,23 +396,24 @@ test(ctx_borrowing_liveness_2) :-
                 ,rs_stmt(2,option_some_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
-        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
-        Results = [[place(variable(5),1),place(variable(2),1),mutable]
-                  ,[variable(4),place(variable(2),1),mutable]
-                  ,[variable(3),variable(2),mutable]].
+        findall([Lhs, Rhs], ctx_borrowing(Stmts, Lhs, Rhs), Results), !,
+        Results = [[place(variable(5),1),place(variable(2),1)]
+                  ,[variable(4),place(variable(2),1)]
+                  ,[variable(3),variable(2)]].
 
 test(ctx_borrowing_liveness_3) :-
-        Stmts = [rs_stmt(6,move_F,[5])
+        Stmts = [rs_stmt(6,bind_F,[5])
                 ,rs_stmt(5,store_new_F,[4])
                 ,rs_stmt(4,borrow_mut_option_p1_F,[3])
                 ,rs_stmt(3,borrow_mut_F,[2])
                 ,rs_stmt(2,option_some_F,[1])
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
-        findall([Lhs, Rhs, Kind], ctx_borrowing(Stmts, Lhs, Rhs, Kind), Results), !,
-        Results = [[place(variable(6),1),place(variable(2),1),mutable]
-                  ,[variable(4),place(variable(2),1),mutable]
-                  ,[variable(3),variable(2),mutable]].
+        findall([Lhs, Rhs], ctx_borrowing(Stmts, Lhs, Rhs), Results), !,
+        Results = [[place(variable(6),1),place(variable(2),1)]
+                  ,[place(variable(5),1),place(variable(2),1)]
+                  ,[variable(4),place(variable(2),1)]
+                  ,[variable(3),variable(2)]].
 
 :- end_tests(ctx_borrowing_liveness).
 
@@ -446,7 +442,7 @@ test(ctx_pinning_3) :-
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
         findall([Op, Status], ctx_pinning(Stmts, Op, Status), Results), !,
-        Results = [[variable(1),moved]].
+        Results = [[variable(1),pinned_moved]].
 
 test(ctx_pinning_4) :-
         Stmts = [rs_stmt(5,pin_new_unchecked_F,[2])
@@ -456,7 +452,7 @@ test(ctx_pinning_4) :-
                 ,rs_stmt(1,unmovable_new_F,[])
                 ],
         findall([Op, Status], ctx_pinning(Stmts, Op, Status), Results), !,
-        Results = [[variable(1),moved]].
+        Results = [[variable(1),pinned_moved]].
 
 test(ctx_pinning_5) :-
         Stmts = [rs_stmt(6,pin_new_unchecked_F,[5])
@@ -470,7 +466,7 @@ test(ctx_pinning_5) :-
         Results = [[place(variable(1),3),pinned]].
 
 test(ctx_pinning_6) :-
-        Stmts = [rs_stmt(7,move_F,[1])
+        Stmts = [rs_stmt(7,deref_move_F,[2])
                 ,rs_stmt(6,pin_new_unchecked_F,[5])
                 ,rs_stmt(5,borrow_mut_p2_p3_F,[4])
                 ,rs_stmt(4,borrow_mut_F,[3])
@@ -478,25 +474,44 @@ test(ctx_pinning_6) :-
                 ,rs_stmt(2,borrow_mut_F,[1])
                 ,rs_stmt(1,ew3p_new_F,[])
                 ],
-        findall([Op, Status], ctx_pinning(Stmts, Op, Status), Results), !,
-        Results = [[place(variable(1),3),moved]].
+        findall([Op, Status], (
+            ctx_pinning(Stmts, Op, Status),
+            validate_liveness(Stmts)
+        ), Results), !,
+        Results = [[place(variable(1),3),pinned_moved]].
 
-%test(ctx_pinning_gen_1) :-
-%        Stmts = [S7
-%                ,S6
-%                ,S5
-%                ,S4
-%                ,rs_stmt(3,mr_ew3p_p2_new_F,[2])
-%                ,rs_stmt(2,borrow_mut_F,[1])
-%                ,rs_stmt(1,ew3p_new_F,[])
-%                ],
-%        ctx_pinning(Stmts, place(variable(1),3), moved),
-%        ctx_typing(Stmts, 7, _),
-%        ctx_typing(Stmts, 6, _),
-%        ctx_typing(Stmts, 5, _), !,
-%        S7 = rs_stmt(7,move_F,[1]),
-%        S6 = rs_stmt(6,pin_new_unchecked_F,[5]),
-%        S5 = rs_stmt(5,borrow_mut_p2_p3_F,[4]),
-%        S4 = rs_stmt(4,borrow_mut_F,[3]).
+test(ctx_pinning_gen_1) :-
+        Stmts = [S7
+                ,S6
+                ,S5
+                ,S4
+                ,rs_stmt(3,mr_ew3p_p2_new_F,[2])
+                ,rs_stmt(2,borrow_mut_F,[1])
+                ,rs_stmt(1,ew3p_new_F,[])
+                ],
+        ctx_pinning(Stmts, place(Op,3), pinned_moved),
+        validate_liveness(Stmts), !,
+        S7 = rs_stmt(7,deref_move_F,[2]),
+        S6 = rs_stmt(6,pin_new_unchecked_F,[5]),
+        S5 = rs_stmt(5,borrow_mut_p2_p3_F,[4]),
+        S4 = rs_stmt(4,borrow_mut_F,[3]),
+        Op = variable(1).
+
+test(ctx_pinning_gen_2) :-
+        Stmts = [S7
+                ,S6
+                ,S5
+                ,S4
+                ,rs_stmt(3,mr_ew3p_p2_new_F,[2])
+                ,rs_stmt(2,borrow_mut_F,[1])
+                ,rs_stmt(1,ew3p_new_F,[])
+                ],
+        ctx_pinning(Stmts, Op, pinned_moved),
+        validate_liveness(Stmts), !,
+        S7 = rs_stmt(7,deref_move_F,[5]),
+        S6 = rs_stmt(6,pin_new_unchecked_F,[5]),
+        S5 = rs_stmt(5,borrow_mut_F,[4]),
+        S4 = rs_stmt(4,unmovable_new_F,[]),
+        Op = variable(4).
 
 :- end_tests(ctx_pinning).
